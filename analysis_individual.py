@@ -127,9 +127,18 @@ def run_analysis(file_path):
             f"7. Stab. Y (Sakady REGR):  {features['sac_reg_y_stab']:.2f} px\n"
             f"{behav_info}"
             f"------------------------------------\n"
-            f"WYNIK MODELU: {diagnosis['total_score']:.3f} (Próg: {diagnosis['threshold']})\n"
-            f"KLASYFIKACJA: {diagnosis['risk_group']}\n"
         )
+
+        if diagnosis['total_score'] is None:
+            report += (
+                f"WYNIK MODELU: BRAK - {diagnosis.get('error', 'segmentacja nieudana')}\n"
+                f"KLASYFIKACJA: {diagnosis['risk_group']}\n"
+            )
+        else:
+            report += (
+                f"WYNIK MODELU: {diagnosis['total_score']:.3f} (Próg: {diagnosis['threshold']})\n"
+                f"KLASYFIKACJA: {diagnosis['risk_group']}\n"
+            )
 
         # Zapis raportu do pliku tekstowego obok wykresu
         with open(report_path, "w", encoding="utf-8") as file:

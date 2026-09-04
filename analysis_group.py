@@ -35,7 +35,10 @@ def process_single_subject(filepath, folder_path, generate_plots):
         events = core.classify_movements(df_segmented, sample_rate_ms)
         features = core.calculate_features(events, sample_rate_ms)
         diagnosis = core.calculate_risk_score(features)
-        
+
+        if diagnosis['total_score'] is None:
+            print(f"  -> Ostrzeżenie {filename}: {diagnosis.get('error', 'segmentacja nieudana')}")
+
         # --- WIZUALIZACJA (OPCJONALNA) ---
         if generate_plots:
             try:

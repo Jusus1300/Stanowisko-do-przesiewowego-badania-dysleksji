@@ -245,9 +245,14 @@ def calculate_features(events, sample_rate_ms):
     saccades = [e for e in events if e['type'] == 'SAC']
     
     if not fixations:
-        return {k: 0.0 for k in ['fix_prog_duration', 'fix_reg_duration', 'fix_reg_std', 
-                                 'fix_dur_std', 'sac_prog_pos_x_mean', 'sac_prog_dist_avg', 
+        # Brak fiksacji oznacza nieudaną segmentację (np. I2MC nie wykrył sygnału),
+        # a nie prawidłowy pomiar zerowy - trzeba to jawnie oznaczyć, żeby
+        # calculate_risk_score nie policzył z tego fałszywie niskiego ryzyka.
+        zero_features = {k: 0.0 for k in ['fix_prog_duration', 'fix_reg_duration', 'fix_reg_std',
+                                 'fix_dur_std', 'sac_prog_pos_x_mean', 'sac_prog_dist_avg',
                                  'sac_prog_range', 'sac_prog_y_stab', 'sac_reg_y_stab']}
+        zero_features['segmentation_failed'] = True
+        return zero_features
 
     prog_fix_durations = []
     reg_fix_durations = []
@@ -294,7 +299,8 @@ def calculate_features(events, sample_rate_ms):
         'sac_prog_dist_avg': get_avg_dist(sac_prog),
         'sac_prog_range': px_to_dva(np.max([abs(s['end_x'] - s['start_x']) for s in sac_prog])) if sac_prog else 0.0,
         'sac_prog_y_stab': get_y_stability(sac_prog),
-        'sac_reg_y_stab': get_y_stability(sac_reg)
+        'sac_reg_y_stab': get_y_stability(sac_reg),
+        'segmentation_failed': False
     }
     return features
 
@@ -302,7 +308,20 @@ def calculate_risk_score(features):
 
     # Algorytm oceny ryzyka dysleksji (Model Logistyczny WRD).
     # Opiera się na 5 kluczowych parametrach ruchu oczu.
-  
+
+    # Segmentacja I2MC nie wykryła żadnych fiksacji - cechy są sztucznymi zerami,
+    # a nie realnym pomiarem. Liczenie z nich z-score dałoby fałszywie niski wynik
+    # ryzyka (cichy false negative), więc trzeba zwrócić jawny błąd zamiast wyniku.
+    if features.get('segmentation_failed', False):
+        return {
+            'total_score': None,
+            'raw_z_score': None,
+            'risk_group': "BŁĄD SEGMENTACJI - wynik nieokreślony",
+            'threshold': 0.5,
+            'details': None,
+            'error': "Algorytm I2MC nie wykrył żadnych fiksacji - brak wiarygodnych danych do oceny ryzyka."
+        }
+
     config_path = "model_config.json"
     
     # Próba wczytania dynamicznych wartości STATS i wag z pliku tekstowego
