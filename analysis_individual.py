@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import analysis_core as core
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
@@ -16,17 +17,25 @@ def run_analysis(file_path):
         clean_df = pd.DataFrame()
         clean_df['x'] = df['BPOGX'] * core.SCREEN_WIDTH
         clean_df['y'] = df['BPOGY'] * core.SCREEN_HEIGHT
-        
-        
-        sample_rate_ms = 1000 / EYETRACKER_FREQ # Fallback
-            
-        clean_df = clean_df[
-            (df['BPOGX'] >= 0) & (df['BPOGX'] <= 1) & 
+
+        if 'TIME' in df.columns:
+            sample_rate_ms = core.estimate_sample_rate_ms(df['TIME'], EYETRACKER_FREQ)
+        else:
+            print(f"Brak kolumny 'TIME' w pliku, używam domyślnej częstotliwości "
+                  f"{EYETRACKER_FREQ} Hz.")
+            sample_rate_ms = 1000.0 / EYETRACKER_FREQ
+
+        # Brakujące/nieprawidłowe próbki (poza zakresem ekranu) oznaczamy jako NaN
+        # zamiast usuwać wiersze: usunięcie wiersza przesuwa oś czasu, więc I2MC
+        # nigdy nie zobaczyłby luki do interpolacji (patrz core.INTERP_MAX_GAP_MS).
+        valid_mask = (
+            (df['BPOGX'] >= 0) & (df['BPOGX'] <= 1) &
             (df['BPOGY'] >= 0) & (df['BPOGY'] <= 1)
-        ].copy()
-        
-        if clean_df.empty:
-            return "Błąd: Brak poprawnych danych po filtracji."
+        )
+        clean_df.loc[~valid_mask, ['x', 'y']] = np.nan
+
+        if clean_df['x'].notna().sum() == 0:
+            return "Błąd: Brak poprawnych danych w pliku."
 
         # 2. Segmentacja - Wywołanie I2MC
         df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms)

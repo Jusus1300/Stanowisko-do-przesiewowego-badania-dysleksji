@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 import glob
 import analysis_core as core
@@ -20,13 +21,22 @@ def process_single_subject(filepath, folder_path, generate_plots):
         clean_df = pd.DataFrame()
         clean_df['x'] = df['gaze_x_left']
         clean_df['y'] = df['gaze_y_left']
-        
-        sample_rate_ms = 1000.0 / core.GROUP_EXPERIMENT_FREQ
-        
-        clean_df = clean_df[(clean_df['x'] > 1) & (clean_df['y'] > 1)].copy()
-        
-        if clean_df.empty:
-            print(f"  -> Pominięto {filename} (brak danych po filtracji)")
+
+        if 'time' in df.columns:
+            sample_rate_ms = core.estimate_sample_rate_ms(df['time'], core.GROUP_EXPERIMENT_FREQ)
+        else:
+            print(f"  -> Brak kolumny 'time' w {filename}, używam domyślnej "
+                  f"częstotliwości {core.GROUP_EXPERIMENT_FREQ} Hz.")
+            sample_rate_ms = 1000.0 / core.GROUP_EXPERIMENT_FREQ
+
+        # Brakujące/nieprawidłowe próbki oznaczamy jako NaN zamiast usuwać wiersze:
+        # usunięcie wiersza przesuwa oś czasu, więc I2MC nigdy nie zobaczyłby luki
+        # do interpolacji (patrz core.INTERP_MAX_GAP_MS).
+        invalid_mask = ~((clean_df['x'] > 1) & (clean_df['y'] > 1))
+        clean_df.loc[invalid_mask, ['x', 'y']] = np.nan
+
+        if clean_df['x'].notna().sum() == 0:
+            print(f"  -> Pominięto {filename} (brak poprawnych danych)")
             return None
 
         # --- POTOK ANALIZY I2MC ---
