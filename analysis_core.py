@@ -11,12 +11,15 @@ SCREEN_HEIGHT = 1050
 SCREEN_WIDTH_CM = 47.4  # Parametry fizyczne ekranu (estymowane)   
 VIEWING_DISTANCE_CM = 60.0
 
-# Częstotliwość próbkowania eyetrackera w grupowym eksperymencie
+# Domyślna (zapasowa) częstotliwość próbkowania eyetrackera w eksperymencie
+# grupowym. Używana wyłącznie jako fallback, gdy w pliku źródłowym brak
+# wiarygodnej kolumny czasu, z której można automatycznie wyznaczyć
+# rzeczywistą częstotliwość (patrz estimate_sample_rate_ms).
 GROUP_EXPERIMENT_FREQ = 250
 
 # === PARAMETRY ALGORYTMU I2MC ===
 INTERP_MAX_GAP_MS = 100
-WINDOW_SIZE_MS = 200 
+WINDOW_SIZE_MS = 200
 MIN_FIX_DURATION_MS = 40
 
 def px_to_dva(px_distance):
@@ -24,6 +27,50 @@ def px_to_dva(px_distance):
     cm_per_px = SCREEN_WIDTH_CM / SCREEN_WIDTH
     dist_cm = px_distance * cm_per_px
     return 2 * np.degrees(np.arctan(dist_cm / (2 * VIEWING_DISTANCE_CM)))
+
+def estimate_sample_rate_ms(time_values, fallback_freq_hz):
+
+    # Automatyczne wyznaczanie okresu próbkowania (ms/próbkę) na podstawie
+    # rzeczywistych znaczników czasu z pliku źródłowego (np. kolumna 'time'
+    # w zbiorze ETDD70 albo 'TIME' w eksporcie z Gazepoint). Częstotliwość
+    # to mediana odstępów między kolejnymi próbkami - odporna na pojedyncze
+    # zdegenerowane wpisy (duplikaty, cofnięcia zegara).
+    #
+    # Wyznaczona wartość jest używana tylko do policzenia jednego skalara
+    # (okres próbkowania); sama kolumna czasu nie jest dalej przenoszona
+    # przez potok analizy - I2MC i tak zakłada równomierne próbkowanie
+    # (interpolacja luk liczona jest w próbkach, a nie w rzeczywistym czasie),
+    # więc do segmentacji nadal służy syntetyczna, równomierna oś czasu
+    # budowana w apply_i2mc_segmentation z indeksu wierszy.
+    #
+    # Gdy znaczniki czasu są nieobecne albo nie da się z nich wyznaczyć
+    # sensownej częstotliwości, używana jest częstotliwość zapasowa.
+    try:
+        t = pd.to_numeric(pd.Series(time_values), errors='coerce').to_numpy(dtype=float)
+        diffs = np.diff(t)
+        diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+
+        if diffs.size < 10:
+            raise ValueError("zbyt mało poprawnych znaczników czasu")
+
+        median_diff = float(np.median(diffs))
+        # Autodetekcja jednostki: znaczniki w sekundach dają odstępy rzędu
+        # 0.001-0.05, znaczniki w milisekundach - odstępy rzędu 1-50.
+        median_diff_ms = median_diff * 1000.0 if median_diff < 1.0 else median_diff
+
+        detected_freq = 1000.0 / median_diff_ms
+        if not (20.0 <= detected_freq <= 2000.0):
+            raise ValueError(f"nierealistyczna częstotliwość ({detected_freq:.1f} Hz)")
+
+        print(f"Automatycznie wykryta częstotliwość próbkowania: {detected_freq:.2f} Hz "
+              f"(mediana odstępu między próbkami: {median_diff_ms:.3f} ms)")
+        return median_diff_ms
+
+    except Exception as e:
+        print(f"Ostrzeżenie: Nie udało się automatycznie wyznaczyć częstotliwości "
+              f"próbkowania z kolumny czasu ({e}). Używam wartości domyślnej: "
+              f"{fallback_freq_hz} Hz.")
+        return 1000.0 / fallback_freq_hz
 
 def apply_i2mc_segmentation(df, sample_rate_ms):
 
