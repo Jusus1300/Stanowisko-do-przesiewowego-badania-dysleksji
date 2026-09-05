@@ -41,3 +41,8 @@ ONE_EURO_MIN_CUTOFF = 0.04
 ONE_EURO_BETA = 0.9
 EYETRACKER_FREQ = 150
 
+# Margines siatki kalibracyjnej we współrzędnych znormalizowanych: punkty
+# skrajne trafiają na 0.1 i 0.9 szerokości/wysokości ekranu, środkowe na 0.5.
+# Z tego powstaje siatka 3x3, czyli kalibracja 9-punktowa.
+CALIBRATION_MARGIN = 0.1
+

@@ -30,6 +30,13 @@ class GazeTracker:
         # Synchronizacja Czasu
         self.time_anchor = None 
 
+        # Odbior odpowiedzi na komendy sterujace. _rx_buffer przechowuje
+        # nadmiarowe dane doczytane z gniazda przy oczekiwaniu na ACK,
+        # a _ack_supported zapamietuje, czy ta wersja Gazepoint Control
+        # w ogole potwierdza polecenia (None = jeszcze nie wiadomo).
+        self._rx_buffer = ""
+        self._ack_supported = None
+
         # Filtrowanie
         filter_config = {
             'freq': 150,
@@ -65,27 +72,105 @@ class GazeTracker:
             self.sock.connect((self.host, self.port))
             self.sock.settimeout(2) # Timeout dla operacji blokujących
             
-            # Wysyłam konfigurację wstępną
+            # Wysyłam konfigurację wstępną i sprawdzam, czy została przyjęta -
+            # odrzucone ENABLE_SEND_POG_BEST oznaczałoby puste kolumny BPOGX/BPOGY
+            # w nagraniu, co bez tej kontroli wyszłoby dopiero na etapie analizy.
             for cmd in self.init_commands:
-                self._send_command(cmd)
-                
+                if self._send_command(cmd, expect_id=self._command_id(cmd)) is False:
+                    print(f"[BLAD] Gazepoint odrzucil komende startowa: {cmd}")
+
             print("[INFO] Pomyślnie połączono z Gazepoint Control.")
         except ConnectionRefusedError:
             print("[BŁĄD] Nie można połączyć się z Gazepoint Control.")
             raise
 
-    def _send_command(self, command):
-        if self.sock:
+    @staticmethod
+    def _command_id(command):
+        # Wyciaga wartosc atrybutu ID z komendy, zeby dopasowac do niej ACK.
+        try:
+            return ET.fromstring(command).get('ID')
+        except ET.ParseError:
+            return None
+
+    @staticmethod
+    def _ack_verdict(line, expect_id):
+        # True dla ACK, False dla NACK, None gdy linia dotyczy czegos innego
+        # (np. rekordu danych, ktory zalega w buforze).
+        line = line.strip()
+        if not (line.startswith('<ACK') or line.startswith('<NACK')):
+            return None
+        try:
+            root = ET.fromstring(line)
+        except ET.ParseError:
+            return None
+        if root.get('ID') != expect_id:
+            return None
+        return root.tag == 'ACK'
+
+    def _await_ack(self, expect_id, timeout):
+        # Czyta z gniazda az do ACK/NACK o pasujacym ID albo do uplywu czasu.
+        # Nadmiarowe linie zostaja w _rx_buffer, zeby nic nie zginelo.
+        deadline = time.monotonic() + timeout
+        while True:
+            while '\r\n' in self._rx_buffer:
+                line, self._rx_buffer = self._rx_buffer.split('\r\n', 1)
+                verdict = self._ack_verdict(line, expect_id)
+                if verdict is not None:
+                    return verdict
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
             try:
-                self.sock.sendall(f"{command}\r\n".encode())
-            except OSError:
-                pass
+                self.sock.settimeout(remaining)
+                chunk = self.sock.recv(4096)
+            except (socket.timeout, OSError):
+                return None
+            finally:
+                try:
+                    self.sock.settimeout(2)
+                except OSError:
+                    pass
+            if not chunk:
+                return None
+            self._rx_buffer += chunk.decode('utf-8', errors='ignore')
+
+    def _send_command(self, command, expect_id=None, timeout=1.0):
+        # Zwraca True (ACK), False (NACK) albo None, gdy potwierdzenia nie
+        # sprawdzano lub serwer nie odpowiedzial. Nigdy nie rzuca wyjatkiem -
+        # brak potwierdzenia degraduje sie do dawnego zachowania "wyslij i idz
+        # dalej", ale zostaje odnotowany w konsoli.
+        if not self.sock:
+            return None
+        try:
+            self.sock.sendall(f"{command}\r\n".encode())
+        except OSError as e:
+            print(f"[BLAD] Nie udalo sie wyslac komendy {command}: {e}")
+            return None
+
+        if expect_id is None or self._ack_supported is False:
+            return None
+
+        verdict = self._await_ack(expect_id, timeout)
+        if verdict is None:
+            if self._ack_supported is None:
+                # Pierwsza komenda bez odpowiedzi: przyjmuje, ze ta wersja
+                # Gazepoint Control nie potwierdza polecen, i przestaje na nie
+                # czekac, zeby nie mnozyc timeoutow przy kazdej kolejnej.
+                self._ack_supported = False
+                print("[WARN] Gazepoint Control nie odpowiada na komendy SET - "
+                      "poprawnosc ustawien nie bedzie weryfikowana.")
+        else:
+            self._ack_supported = True
+        return verdict
 
     def _flush_socket(self):
         # Opróżnia bufor gniazda ze starych danych (np. z kalibracji).
         # Używa trybu nieblokującego, aby wczytać wszystko co zalega, aż do pustego bufora.
         if not self.sock: return
-        
+
+        self._rx_buffer = ""
+
         try:
             self.sock.setblocking(False) # Tryb nieblokujący
             while True:
@@ -99,13 +184,56 @@ class GazeTracker:
         finally:
             self.sock.setblocking(True) # Przywracam tryb blokujący
 
+    def calibration_grid(self):
+        # Siatka 3x3 (9 punktów) we współrzędnych znormalizowanych, budowana
+        # z marginesu w experiment_config. Kolejność wierszami, od lewej
+        # górnej do prawej dolnej - Gazepoint kalibruje w kolejności dodania.
+        m = experiment_config.CALIBRATION_MARGIN
+        coords = (m, 0.5, 1.0 - m)
+        return [(x, y) for y in coords for x in coords]
+
     def calibrate(self):
-        print("[INFO] Uruchamianie kalibracji systemowej...")
-        self._send_command('<SET ID="CALIBRATE_TYPE" VALUE="9" />')
-        self._send_command('<SET ID="CALIBRATE_SHOW" STATE="1" />')
-        self._send_command('<SET ID="CALIBRATE_START" STATE="1" />')
+        # Open Gaze API nie ma komendy ustawiającej "typ" kalibracji - liczbę
+        # i rozmieszczenie punktów definiuje się czyszcząc listę punktów
+        # (CALIBRATE_CLEAR), a następnie dodając je pojedynczo
+        # (CALIBRATE_ADDPOINT). Wcześniejsze CALIBRATE_TYPE nie istnieje
+        # w protokole: serwer odrzucał je, a ponieważ kod nie czytał
+        # odpowiedzi, w praktyce działała domyślna kalibracja z Gazepoint
+        # Control, nie 9-punktowa.
+        points = self.calibration_grid()
+        print(f"[INFO] Konfiguracja kalibracji {len(points)}-punktowej...")
+
+        if self._send_command('<SET ID="CALIBRATE_CLEAR" STATE="1" />',
+                              expect_id="CALIBRATE_CLEAR") is False:
+            print("[BLAD] Gazepoint odrzucil wyczyszczenie listy punktow "
+                  "kalibracyjnych - do siatki moga dojsc punkty domyslne.")
+
+        accepted = 0
+        for i, (x, y) in enumerate(points, start=1):
+            verdict = self._send_command(
+                f'<SET ID="CALIBRATE_ADDPOINT" X="{x:.4f}" Y="{y:.4f}" />',
+                expect_id="CALIBRATE_ADDPOINT"
+            )
+            if verdict is False:
+                print(f"[BLAD] Gazepoint odrzucil punkt {i} ({x:.2f}, {y:.2f}).")
+            elif verdict is True:
+                accepted += 1
+
+        if self._ack_supported is False:
+            print(f"[WARN] Gazepoint nie potwierdza komend - nie moge zweryfikowac, "
+                  f"czy przyjal {len(points)} punktow. Sprawdz liczbe punktow "
+                  f"w oknie Gazepoint Control.")
+        elif accepted == len(points):
+            print(f"[INFO] Gazepoint przyjal {accepted}/{len(points)} punktow kalibracyjnych.")
+        else:
+            print(f"[BLAD] Gazepoint przyjal tylko {accepted}/{len(points)} punktow - "
+                  f"kalibracja NIE jest {len(points)}-punktowa.")
+
+        self._send_command('<SET ID="CALIBRATE_SHOW" STATE="1" />',
+                           expect_id="CALIBRATE_SHOW")
+        self._send_command('<SET ID="CALIBRATE_START" STATE="1" />',
+                           expect_id="CALIBRATE_START")
         print("[INFO] Oczekiwanie na zakończenie kalibracji przez Gazepoint...")
-        # Tutaj teoretycznie można by poczekać na ID="CALIBRATE_RESULT"
 
     def start_logging(self, data_filename, event_filename, save_events):
         # 1. Najpierw wyrzucam śmieci z bufora
