@@ -12,8 +12,10 @@ from sklearn.metrics import make_scorer, recall_score
 CONFIG_PATH = "model_config.json"
 
 # 1. Wybór i wczytanie danych: ścieżka z linii poleceń (tryb wsadowy, np.
-#    uruchomienie z etdd70_pipeline.py) albo okno eksploratora, gdy skrypt
-#    jest odpalany ręcznie przez operatora.
+#    retrening na gotowym pliku wyników analizy grupowej) albo okno
+#    eksploratora, gdy skrypt jest odpalany ręcznie przez operatora.
+#    Tkinter jest importowany dopiero w gałęzi z oknem - dzięki temu tryb
+#    wsadowy działa też na maszynie bez środowiska graficznego.
 parser = argparse.ArgumentParser(description="Trening modelu ryzyka dysleksji")
 parser.add_argument("--input", help="Plik CSV z cechami i kolumną is_dyslexic")
 args = parser.parse_args()
