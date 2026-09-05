@@ -1,0 +1,6 @@
+# Cache bajtkodu Pythona
+__pycache__/
+*.py[cod]
+
+# Wyniki analizy generowane lokalnie
+*_scanpath.png
