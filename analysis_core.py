@@ -379,17 +379,27 @@ def calculate_risk_score(features):
         intercept = model_config["weights"]["intercept"]
         coefs = model_config["weights"]["coefs"]
     else:
-        print("Ostrzeżenie: Brak pliku 'model_config.json'. Używam starych, domyślnych wartości.")
-        # Statystyki populacyjne do standaryzacji (wartości domyślne)
+        # Zestaw awaryjny, używany wyłącznie przy braku 'model_config.json'.
+        # To kopia wag i tabeli STATS z aktualnego modelu - retreningu na
+        # zbiorze ETDD70 (70 uczestników, zadanie T4 Meaningful Text).
+        # Po każdym uruchomieniu model_trainer.py trzeba je tutaj przepisać:
+        # rozjazd między tym zestawem a plikiem konfiguracyjnym cicho zmienia
+        # wynik modelu, bez żadnego sygnału dla operatora.
+        print("Ostrzeżenie: Brak pliku 'model_config.json'. Używam wartości "
+              "domyślnych wbudowanych w analysis_core.")
+        # Statystyki populacyjne do standaryzacji. Czasy fiksacji w
+        # milisekundach, cechy sakadowe w stopniach kąta widzenia (DVA) -
+        # w tych samych jednostkach, w których zwraca je calculate_features.
         STATS = {
-            'fix_reg_duration': {'mean': 343.8833, 'std': 77.5709},
-            'fix_prog_duration': {'mean': 431.1039, 'std': 109.1987},
-            'fix_reg_std': {'mean': 272.4751, 'std': 128.4067},
-            'sac_prog_y_stab': {'mean': 14.2653, 'std': 5.1284},
-            'sac_prog_dist_avg': {'mean': 65.2241, 'std': 15.8542}
+            'fix_reg_duration': {'mean': 337.66074627597123, 'std': 74.1631008137747},
+            'fix_prog_duration': {'mean': 423.05866605688306, 'std': 106.84464830742225},
+            'fix_reg_std': {'mean': 268.26509832855834, 'std': 115.95264309252275},
+            'sac_prog_y_stab': {'mean': 0.3676181795729591, 'std': 0.11968727737964847},
+            'sac_prog_dist_avg': {'mean': 1.7366258296096886, 'std': 0.42668557886256075}
         }
-        intercept = 0.3258677392698436
-        coefs = [2.5853168, 0.71192308, -0.61731528, 1.00967702, -0.17200714]
+        intercept = 0.27248292146912045
+        coefs = [1.7073088081488794, 1.0414771109819583, -0.3289192400198192,
+                 0.764273612115708, -0.1648620870330059]
 
     # Pobranie cech z obliczonych danych
     val_x1 = features.get('fix_reg_duration', 0.0)
