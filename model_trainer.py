@@ -90,7 +90,11 @@ print(f"Zbiór treningowy: {len(df)} uczestników "
 # 2. Standaryzacja (z-score) + model w jednym Pipeline, żeby scaler był dopasowywany
 #    wyłącznie na foldzie treningowym w każdej iteracji CV (bez przecieku danych)
 scaler = StandardScaler()
-model = LogisticRegression(penalty=None) # czysta regresja logistyczna bez regularyzacji
+model = LogisticRegression(C=np.inf) # czysta regresja logistyczna bez regularyzacji
+# C to odwrotnosc sily regularyzacji, wiec C=np.inf oznacza jej calkowity brak.
+# Zapis rownowazny wycofywanemu penalty=None (usuwane w scikit-learn 1.10),
+# dajacy identyczne wspolczynniki - wagi trafiaja wprost do model_config.json,
+# wiec nie moga byc sciagniete przez zadna kare.
 pipeline = Pipeline([('scaler', scaler), ('logreg', model)])
 
 # 3. Poprawna walidacja (Kroswalidacja)
