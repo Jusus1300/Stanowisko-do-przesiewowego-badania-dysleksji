@@ -188,8 +188,8 @@ def run_analysis(file_path):
             f"3. Odchylenie std REGR:    {features['fix_reg_std']:.2f} ms\n"
             f"4. Śr. dystans sakad PROG: {features['sac_prog_dist_avg']:.2f} px\n"
             f"5. Max zakres sakad PROG:  {features['sac_prog_range']:.2f} px\n"
-            f"6. Stab. Y (Sakady PROG):  {features['sac_prog_y_stab']:.2f} px\n"
-            f"7. Stab. Y (Sakady REGR):  {features['sac_reg_y_stab']:.2f} px\n"
+            f"6. Stab. Y (Sakady PROG):  {features['sac_prog_y_stab']:.2f} deg\n"
+            f"7. Stab. Y (Sakady REGR):  {features['sac_reg_y_stab']:.2f} deg\n"
             f"{behav_info}"
             f"------------------------------------\n"
         )
