@@ -437,7 +437,8 @@ def calculate_risk_score(features):
     else:
         # Zestaw awaryjny, używany wyłącznie przy braku 'model_config.json'.
         # To kopia wag i tabeli STATS z aktualnego modelu - retreningu na
-        # zbiorze ETDD70 (70 uczestników, zadanie T4 Meaningful Text).
+        # zbiorze ETDD70 (70 uczestników, zadanie T4 Meaningful Text)
+        # z etykietami is_dyslexic.
         # Po każdym uruchomieniu model_trainer.py trzeba je tutaj przepisać:
         # rozjazd między tym zestawem a plikiem konfiguracyjnym cicho zmienia
         # wynik modelu, bez żadnego sygnału dla operatora.
@@ -447,15 +448,15 @@ def calculate_risk_score(features):
         # milisekundach, cechy sakadowe w stopniach kąta widzenia (DVA) -
         # w tych samych jednostkach, w których zwraca je calculate_features.
         STATS = {
-            'fix_reg_duration': {'mean': 337.66074627597123, 'std': 74.1631008137747},
-            'fix_prog_duration': {'mean': 423.05866605688306, 'std': 106.84464830742225},
-            'fix_reg_std': {'mean': 268.26509832855834, 'std': 115.95264309252275},
-            'sac_prog_y_stab': {'mean': 0.3676181795729591, 'std': 0.11968727737964847},
-            'sac_prog_dist_avg': {'mean': 1.7366258296096886, 'std': 0.42668557886256075}
+            'fix_reg_duration': {'mean': 337.5627714323312, 'std': 72.41359450361163},
+            'fix_prog_duration': {'mean': 422.789064069942, 'std': 107.18257024713833},
+            'fix_reg_std': {'mean': 267.92115303822277, 'std': 116.61552564111372},
+            'sac_prog_y_stab': {'mean': 0.3678624739784415, 'std': 0.12198500218950493},
+            'sac_prog_dist_avg': {'mean': 1.7343245161981486, 'std': 0.42737391182661394}
         }
-        intercept = 0.27248292146912045
-        coefs = [1.7073088081488794, 1.0414771109819583, -0.3289192400198192,
-                 0.764273612115708, -0.1648620870330059]
+        intercept = 0.2951960612158726
+        coefs = [1.5087477196023875, 1.161951470822861, -0.11456724919567332,
+                 0.7200010644824522, -0.13853250801537106]
 
     # Pobranie cech z obliczonych danych
     val_x1 = features.get('fix_reg_duration', 0.0)
