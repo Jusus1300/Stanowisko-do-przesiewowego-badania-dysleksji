@@ -1,6 +1,4 @@
 import tkinter as tk
-from tkinter import font as tkfont
-from tkinter import ttk 
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 from screeninfo import get_monitors, ScreenInfoError

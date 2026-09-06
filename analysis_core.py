@@ -20,7 +20,8 @@ GROUP_EXPERIMENT_FREQ = 250
 # === PARAMETRY ALGORYTMU I2MC ===
 INTERP_MAX_GAP_MS = 100
 WINDOW_SIZE_MS = 200
-MIN_FIX_DURATION_MS = 40
+# Minimalny czas trwania fiksacji nie jest tu ustawiany - obowiazuje
+# wbudowana wartosc domyslna I2MC (opt['minFixDur'], 40 ms).
 
 # Ziarno generatora liczb losowych używanego przez I2MC.
 #

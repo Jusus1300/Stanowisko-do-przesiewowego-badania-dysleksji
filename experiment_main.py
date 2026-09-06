@@ -1,8 +1,7 @@
 import sys
 import os
 import csv
-import time
-from datetime import datetime, time
+from datetime import datetime
 from gazepoint import GazeTracker
 import tkinter_module as ui
 import experiment_module as exp
