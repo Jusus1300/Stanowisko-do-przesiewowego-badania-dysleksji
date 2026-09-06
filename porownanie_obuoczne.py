@@ -16,6 +16,12 @@ w I2MC.kmeans2 woła np.random bez ustawionego ziarna), więc pojedynczy przebie
 nie rozstrzyga niczego. Każdy wariant jest liczony dla N_REP ziaren, a efekt
 systematyczny raportowany jest na tle rozrzutu międzyziarnowego.
 
+Skrypt woła I2MC bezpośrednio i sam ustawia ziarno (jedno na numer powtórzenia,
+wspólne dla wszystkich wariantów, żeby różnice między wariantami nie brały się
+z losowania). Pomija tym samym stałe analysis_core.I2MC_RANDOM_SEED, którym
+potok produkcyjny wymusza powtarzalność - gdyby go użyć, wszystkie powtórzenia
+dałyby ten sam wynik i rozrzutu nie dałoby się zmierzyć.
+
 Użycie:
     python porownanie_obuoczne.py --dane KATALOG [--powtorzenia 12] [--wyjscie plik.csv]
 

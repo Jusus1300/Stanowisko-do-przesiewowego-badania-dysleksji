@@ -22,6 +22,21 @@ INTERP_MAX_GAP_MS = 100
 WINDOW_SIZE_MS = 200
 MIN_FIX_DURATION_MS = 40
 
+# Ziarno generatora liczb losowych używanego przez I2MC.
+#
+# Grupowanie 2-means w I2MC startuje z inicjalizacji kmeans++, która losuje
+# centroidy startowe (I2MC.kmeans2 woła np.random.randint i np.random.rand
+# bez ustawionego ziarna). Bez ustalonego ziarna ten sam plik daje przy każdym
+# uruchomieniu inny wynik: zaobserwowany rozstęp oceny ryzyka dla jednego
+# uczestnika sięgał 0,13, czyli więcej niż różnica między analizą jednooczną
+# a obuoczną. Wyników nie dałoby się wtedy odtworzyć ani porównać między
+# wersjami potoku.
+#
+# Wartość None przywraca zachowanie losowe - przydatne wyłącznie wtedy, gdy
+# celem jest zmierzenie rozrzutu między przebiegami (patrz
+# porownanie_obuoczne.py, które losowością steruje samodzielnie).
+I2MC_RANDOM_SEED = 42
+
 def px_to_dva(px_distance):
     # Konwertuje dystans w pikselach na stopnie kąta widzenia (DVA).
     cm_per_px = SCREEN_WIDTH_CM / SCREEN_WIDTH
@@ -71,6 +86,26 @@ def estimate_sample_rate_ms(time_values, fallback_freq_hz):
               f"próbkowania z kolumny czasu ({e}). Używam wartości domyślnej: "
               f"{fallback_freq_hz} Hz.")
         return 1000.0 / fallback_freq_hz
+
+def run_i2mc(data, opt):
+
+    # Uruchamia I2MC z ustalonym ziarnem generatora losowego (logging=False
+    # wycisza printy biblioteki).
+    #
+    # I2MC losuje centroidy startowe z globalnego generatora numpy, więc ziarno
+    # trzeba ustawić przed wywołaniem. Poprzedni stan generatora jest
+    # odtwarzany po zakończeniu, żeby segmentacja nie zmieniała po cichu
+    # losowości w kodzie wywołującym - istotne przy analizie grupowej, gdzie
+    # jeden proces roboczy przetwarza wielu uczestników po kolei.
+    if I2MC_RANDOM_SEED is None:
+        return I2MC.I2MC(data, opt, logging=False)
+
+    rng_state = np.random.get_state()
+    try:
+        np.random.seed(I2MC_RANDOM_SEED)
+        return I2MC.I2MC(data, opt, logging=False)
+    finally:
+        np.random.set_state(rng_state)
 
 def apply_i2mc_segmentation(df, sample_rate_ms):
 
@@ -151,9 +186,8 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
     
     try:
         # Uruchomienie I2MC
-        # logging=False wycisza printy biblioteki
-        res = I2MC.I2MC(data, opt, logging=False)
-        
+        res = run_i2mc(data, opt)
+
         # === OBSŁUGA RÓŻNYCH TYPÓW ZWRACANYCH DANYCH ===
         
         # Przypadek 1: Tuple (krotka) - [dict, DataFrame, dict]

@@ -191,17 +191,52 @@ użytego w niniejszej analizie.
 *Zalecenie:* przeliczyć zbiór aktualnym kodem i nadpisać CSV przed cytowaniem
 z niego wyników w pracy.
 
-### 3.2. Potok jest niedeterministyczny
+### 3.2. Niedeterminizm potoku — rozwiązany
 
 `I2MC.kmeans2` inicjalizuje centroidy metodą k-means++ używając `np.random.randint`
-i `np.random.rand` **bez ustawionego ziarna** (`I2MC.py`, w. 535–547). Każde
-uruchomienie tego samego pliku daje inny wynik: zaobserwowany rozstęp wyniku dla
-jednego uczestnika sięga 0,13 (uczestnik 1095, wariant `bino`: 0,15–0,28).
+i `np.random.rand` **bez ustawionego ziarna** (`I2MC.py`, w. 535–547). Przed
+zmianą każde uruchomienie tego samego pliku dawało inny wynik: zaobserwowany
+rozstęp oceny ryzyka dla jednego uczestnika sięgał 0,13 (uczestnik 1095, wariant
+`bino`: 0,15–0,28), czyli **więcej niż różnica między analizą jednooczną
+a obuoczną**. Raportowanych liczb nie dałoby się odtworzyć ani porównać między
+wersjami potoku.
 
-Dla pracy dyplomowej oznacza to, że raportowane liczby nie są odtwarzalne przez
-recenzenta. Wystarczy `np.random.seed(...)` na początku
-`process_single_subject`/`run_analysis` (przy `ProcessPoolExecutor` ziarno trzeba
-ustawić wewnątrz procesu roboczego, tak jak robi to `porownanie_obuoczne.py`).
+**Rozwiązanie.** `analysis_core.run_i2mc` ustawia ziarno
+(`I2MC_RANDOM_SEED = 42`) bezpośrednio przed wywołaniem I2MC i przywraca
+poprzedni stan generatora po zakończeniu. Ziarno ustawiane jest wewnątrz samej
+segmentacji, więc obejmuje wszystkie potoki i nie da się go pominąć; przywracanie
+stanu sprawia, że funkcja nie zmienia po cichu losowości w kodzie wywołującym —
+istotne przy analizie grupowej, gdzie jeden proces roboczy przetwarza wielu
+uczestników po kolei. `I2MC_RANDOM_SEED = None` przywraca zachowanie losowe,
+gdyby trzeba było zmierzyć rozrzut przez produkcyjny potok.
+
+Zweryfikowane: trzy kolejne przebiegi analizy grupowej dają bajtowo identyczny
+plik wyników, a uczestnik policzony osobno daje ten sam wynik co policzony
+w grupie (kolejność kończenia procesów roboczych nie ma znaczenia).
+
+**Czego to nie załatwia.** Ustalone ziarno zamraża jedno konkretne losowanie,
+nie usuwa rozrzutu. Porównanie wyniku przy ziarnie 42 z rozkładem z 12 ziaren
+(wariant `bino`) pokazuje, gdzie to losowanie wypadło:
+
+| uczestnik | ziarno 42 | mediana | min–max | percentyl |
+|---|---|---|---|---|
+| 1075 | 0,25 | 0,27 | 0,25–0,33 | 25% |
+| 1082 | 0,97 | 0,97 | 0,96–0,98 | 46% |
+| 1090 | 0,26 | 0,21 | 0,20–0,27 | 92% |
+| 1095 | 0,30 | 0,19 | 0,15–0,28 | 100% |
+| 1109 | 0,21 | 0,21 | 0,21–0,22 | 38% |
+
+Dla uczestnika 1095 ziarno 42 daje wynik powyżej maksimum z 12 wcześniejszych
+losowań. Przy 12 próbkach wypadnięcie nowego losowania poza zaobserwowany zakres
+zdarza się z prawdopodobieństwem ok. 15% na uczestnika, więc jeden taki przypadek
+na pięciu jest oczekiwany — ale pokazuje, że **wynik pojedynczego uczestnika
+przy ustalonym ziarnie nie jest „tym właściwym", tylko jednym z rozkładu**.
+Ziarno 42 wybrano arbitralnie, przed obejrzeniem wyników; dobieranie go pod
+wynik byłoby zwykłym przeszukiwaniem ziaren.
+
+Wniosek dla pracy: liczby raportować z ustalonym ziarnem (są odtwarzalne),
+a wielkość rozrzutu podać osobno, uruchamiając `porownanie_obuoczne.py` na
+kilkunastu ziarnach. Rozrzut jest własnością algorytmu, nie błędem pomiaru.
 
 ### 3.3. Automatyczne wykrywanie częstotliwości nie działa na ETDD70
 
@@ -242,7 +277,11 @@ Zmiana została wprowadzona w obu potokach (szczegóły w §6). Pozostaje retren
    pliki bez kolumn prawego oka) do I2MC trafia jeden kanał zamiast tego samego
    sygnału wpisanego dwa razy. Nie zmienia to wyników (0,005 wobec 0,017 szumu),
    a skraca segmentację o połowę — zgodnie z narracją o optymalizacji z §4.4.5.
-5. **Zgodność wstecz** — nagrania i pliki bez drugiego oka nadal działają,
+5. **Ustalone ziarno generatora losowego** — `analysis_core.run_i2mc` seeduje
+   I2MC (`I2MC_RANDOM_SEED = 42`), więc potok jest odtwarzalny; szczegóły
+   i zastrzeżenia w §3.2. Bez tego nie dałoby się wykazać, że zmiana metryk po
+   retreningu pochodzi z obuoczności, a nie z losowej inicjalizacji k-means.
+6. **Zgodność wstecz** — nagrania i pliki bez drugiego oka nadal działają,
    schodząc do trybu jednoocznego z komunikatem w konsoli. Oko bez ani jednej
    poprawnej próbki jest odrzucane, zamiast trafiać do I2MC jako kolumna samych
    NaN (grupowanie takiego kanału przewróciłoby segmentację także dla oka
@@ -250,18 +289,13 @@ Zmiana została wprowadzona w obu potokach (szczegóły w §6). Pozostaje retren
 
 **Do zrobienia:**
 
-6. **Retrening modelu** — konieczny, nie opcjonalny. `model_config.json` zawiera
+7. **Retrening modelu** — konieczny, nie opcjonalny. `model_config.json` zawiera
    wagi i tabelę `STATS` wyznaczone na cechach jednoocznych; cechy obuoczne
    pochodzą z innego rozkładu (przesunięcia do 0,79 SD, §2.3), więc dopóki model
    nie zostanie przetrenowany, wyniki są policzone niespójnym modelem.
    Kolejność: `analysis_group.run_analysis` na pełnym zbiorze →
    `model_trainer.py --input <nowy CSV>` → przepisanie nowych wag do zestawu
    awaryjnego w `analysis_core.calculate_risk_score`.
-7. **Rozważyć ustawienie ziarna RNG** (§3.2) przed retreningiem — bez
-   determinizmu nie da się wykazać, że zmiana metryk pochodzi z obuoczności,
-   a nie z losowej inicjalizacji k-means. Wtedy porównanie „jednooczny vs
-   obuoczny" na pełnych 70 uczestnikach staje się samodzielnym, mocnym wynikiem
-   metodologicznym pracy.
 8. **Zaktualizować §4.4.1 pracy** — akapit opisujący analizę jednooczną jest już
    nieaktualny. Gotowy tekst po zmianie: §5 (wersja archiwalna: §5.1).
 
@@ -365,6 +399,11 @@ python porownanie_obuoczne.py --dane <katalog z Subject_*_raw.csv> --powtorzenia
 Skrypt nie modyfikuje potoku diagnostycznego — buduje słownik wejściowy I2MC
 czterema sposobami i przepuszcza wynik przez niezmienione
 `analysis_core.classify_movements`, `calculate_features` i `calculate_risk_score`.
+Ziarnem steruje samodzielnie (jedno ziarno na numer powtórzenia, wspólne dla
+wszystkich wariantów), z pominięciem stałego `I2MC_RANDOM_SEED` z potoku
+produkcyjnego — inaczej wszystkie powtórzenia dałyby ten sam wynik i rozrzutu
+nie dałoby się zmierzyć. To jest właśnie narzędzie, którym podaje się w pracy
+wielkość rozrzutu obok liczb z ustalonym ziarnem (§3.2).
 Środowisko użyte w analizie: Python 3.11, I2MC 2.2.8.
 
 Ograniczenie: pomiary wykonano na 5 z 70 uczestników (tylko te pliki surowe były
