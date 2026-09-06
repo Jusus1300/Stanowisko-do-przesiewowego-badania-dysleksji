@@ -99,7 +99,13 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
         'missingx': np.nan,
         'missingy': np.nan,
         'windowtimeInterp': INTERP_MAX_GAP_MS / 1000.0,
-        'maxdisp': 99999, 
+        # Maksymalne przemieszczenie wzroku dopuszczalne w trakcie luki, żeby
+        # I2MC zgodził się ją zinterpolować. Wartość domyślna biblioteki
+        # (xres * 0.2 * sqrt(2) = ok. 475 px). Wcześniejsze 99999 px było
+        # większe niż przekątna ekranu, czyli w praktyce wyłączało ten test:
+        # luka pokrywająca się z powrotem do nowego wiersza była zalepiana
+        # gładką krzywą, choć wzrok realnie przeskoczył ~1400 px.
+        'maxdisp': SCREEN_WIDTH * 0.2 * np.sqrt(2),
         'windowtime': WINDOW_SIZE_MS / 1000.0,
         'steptime': 0.02,
         'downsamples': valid_downsamples,
