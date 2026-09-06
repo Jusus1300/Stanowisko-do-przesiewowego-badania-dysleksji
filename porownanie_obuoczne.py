@@ -4,11 +4,12 @@ Skrypt pomocniczy (nie wchodzi w skład potoku diagnostycznego). Służy do
 zmierzenia, jak na wyniki końcowe wpływa to, który sygnał trafia do kanałów
 wejściowych I2MC. Porównywane są cztery warianty:
 
-  dup     - stan obecny w analysis_core.apply_i2mc_segmentation: sygnał oka
+  dup     - wariant historyczny (sprzed przejścia na obuoczność): sygnał oka
             lewego wpisany do obu kanałów ('L_X' i 'R_X' to ta sama tablica),
   mono    - uczciwie jednooczny: do I2MC trafia wyłącznie 'L_X'/'L_Y',
   mono_r  - jak wyżej, ale na oku prawym (kontrola arbitralności wyboru oka),
   bino    - rzeczywiście obuoczny: 'L_*' z oka lewego, 'R_*' z oka prawego.
+            To wariant, na którym pracuje obecny potok.
 
 Klastrowanie 2-means wewnątrz I2MC startuje z losowej inicjalizacji (kmeans++
 w I2MC.kmeans2 woła np.random bez ustawionego ziarna), więc pojedynczy przebieg

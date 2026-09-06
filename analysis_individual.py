@@ -14,9 +14,26 @@ def run_analysis(file_path):
         df = pd.read_csv(file_path)
         
         # 1. Przygotowanie sygnału
+        #
+        # Nagrania z GP3 zawierają punkt spojrzenia osobno dla każdego oka
+        # (LPOG*/RPOG*) oraz uśredniony przez okulograf punkt BPOG. Do
+        # segmentacji podajemy oba oczy, żeby I2MC mógł grupować je
+        # niezależnie. Starsze nagrania, sprzed włączenia ENABLE_SEND_POG_LEFT
+        # i ENABLE_SEND_POG_RIGHT w gazepoint.py, mają tylko BPOG - wtedy
+        # potok schodzi do trybu jednoocznego na tym uśrednionym punkcie.
+        has_both_eyes = {'LPOGX', 'LPOGY', 'RPOGX', 'RPOGY'} <= set(df.columns)
+
         clean_df = pd.DataFrame()
-        clean_df['x'] = df['BPOGX'] * core.SCREEN_WIDTH
-        clean_df['y'] = df['BPOGY'] * core.SCREEN_HEIGHT
+        if has_both_eyes:
+            clean_df['x'] = df['LPOGX'] * core.SCREEN_WIDTH
+            clean_df['y'] = df['LPOGY'] * core.SCREEN_HEIGHT
+            clean_df['x_prawe'] = df['RPOGX'] * core.SCREEN_WIDTH
+            clean_df['y_prawe'] = df['RPOGY'] * core.SCREEN_HEIGHT
+        else:
+            print("Brak kolumn LPOG*/RPOG* - nagranie sprzed przejścia na zapis "
+                  "obuoczny. Analiza jednooczna na uśrednionym punkcie BPOG.")
+            clean_df['x'] = df['BPOGX'] * core.SCREEN_WIDTH
+            clean_df['y'] = df['BPOGY'] * core.SCREEN_HEIGHT
 
         if 'TIME' in df.columns:
             sample_rate_ms = core.estimate_sample_rate_ms(df['TIME'], EYETRACKER_FREQ)
@@ -28,14 +45,52 @@ def run_analysis(file_path):
         # Brakujące/nieprawidłowe próbki (poza zakresem ekranu) oznaczamy jako NaN
         # zamiast usuwać wiersze: usunięcie wiersza przesuwa oś czasu, więc I2MC
         # nigdy nie zobaczyłby luki do interpolacji (patrz core.INTERP_MAX_GAP_MS).
-        valid_mask = (
-            (df['BPOGX'] >= 0) & (df['BPOGX'] <= 1) &
-            (df['BPOGY'] >= 0) & (df['BPOGY'] <= 1)
-        )
-        clean_df.loc[~valid_mask, ['x', 'y']] = np.nan
+        #
+        # Filtr działa osobno na każdym oku - próbka odrzucona na jednym oku nie
+        # unieważnia drugiego, bo I2MC potrafi skorzystać z oka pozostałego
+        # (I2MC.average_eyes). Poza zakresem ekranu sprawdzana jest też flaga
+        # poprawności z okulografu (POGV): GP3 przy zgubionym oku podaje ostatnią
+        # znaną pozycję z POGV=0, a taka próbka mieści się w zakresie 0-1
+        # i przeszłaby przez sam test zakresu.
+        def valid_mask(x_col, y_col, v_col):
+            mask = (
+                (df[x_col] >= 0) & (df[x_col] <= 1) &
+                (df[y_col] >= 0) & (df[y_col] <= 1)
+            )
+            if v_col in df.columns:
+                mask &= pd.to_numeric(df[v_col], errors='coerce') == 1
+            return mask
 
-        if clean_df['x'].notna().sum() == 0:
+        if has_both_eyes:
+            clean_df.loc[~valid_mask('LPOGX', 'LPOGY', 'LPOGV'), ['x', 'y']] = np.nan
+            clean_df.loc[~valid_mask('RPOGX', 'RPOGY', 'RPOGV'),
+                         ['x_prawe', 'y_prawe']] = np.nan
+        else:
+            clean_df.loc[~valid_mask('BPOGX', 'BPOGY', 'BPOGV'), ['x', 'y']] = np.nan
+
+        # Oko bez ani jednej poprawnej próbki wypada z analizy zamiast trafiać
+        # do I2MC jako kolumna samych NaN - grupowanie takiego kanału kończy się
+        # błędem i przewraca segmentację także dla oka sprawnego.
+        left_ok = clean_df['x'].notna().any()
+        right_ok = has_both_eyes and clean_df['x_prawe'].notna().any()
+
+        if not left_ok and not right_ok:
             return "Błąd: Brak poprawnych danych w pliku."
+
+        if left_ok and right_ok:
+            tryb_segmentacji = "obuoczny (LPOG + RPOG)"
+        elif left_ok:
+            clean_df = clean_df[['x', 'y']]
+            if has_both_eyes:
+                print("Prawe oko bez poprawnych próbek - analiza jednooczna (lewe).")
+                tryb_segmentacji = "jednooczny - lewe oko (prawe bez poprawnych próbek)"
+            else:
+                tryb_segmentacji = "jednooczny - uśredniony punkt BPOG"
+        else:
+            clean_df = clean_df[['x_prawe', 'y_prawe']].rename(
+                columns={'x_prawe': 'x', 'y_prawe': 'y'})
+            print("Lewe oko bez poprawnych próbek - analiza jednooczna (prawe).")
+            tryb_segmentacji = "jednooczny - prawe oko (lewe bez poprawnych próbek)"
 
         # 2. Segmentacja - Wywołanie I2MC
         df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms)
@@ -124,6 +179,7 @@ def run_analysis(file_path):
             f"Plik: {file_path}\n"
             f"Wykrytych fiksacji: {len([e for e in events if e['type'] == 'FIX'])}\n"
             f"Częstotliwość próbkowania: {sample_rate_ms:.2f} ms\n"
+            f"Tryb segmentacji: {tryb_segmentacji}\n"
             f"Status wizualizacji: {viz_status}\n"
             f"------------------------------------\n"
             f"CECHY DIAGNOSTYCZNE:\n"

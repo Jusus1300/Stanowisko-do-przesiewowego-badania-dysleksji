@@ -50,19 +50,36 @@ class GazeTracker:
         # Komendy konfiguracyjne.
         self.init_commands = [
             '<SET ID="ENABLE_SEND_TIME" STATE="1" />',
-            '<SET ID="ENABLE_SEND_TIME_TICK" STATE="1" />', 
+            '<SET ID="ENABLE_SEND_TIME_TICK" STATE="1" />',
+            # Punkt spojrzenia osobno dla każdego oka. Bez tych dwóch komend
+            # GP3 wysyła wyłącznie BPOG, czyli punkt już uśredniony przez
+            # okulograf - a wtedy I2MC nie ma dwóch niezależnych sygnałów do
+            # grupowania i deklarowana odporność algorytmu na szum nie jest
+            # osiągana (patrz analiza_obuoczna_i2mc.md).
+            '<SET ID="ENABLE_SEND_POG_LEFT" STATE="1" />',
+            '<SET ID="ENABLE_SEND_POG_RIGHT" STATE="1" />',
+            # BPOG zostaje: służy do podglądu na żywo i jako zapas dla nagrań,
+            # w których któreś z oczu nie było widoczne.
             '<SET ID="ENABLE_SEND_POG_BEST" STATE="1" />',
             # Ważne: Domyślnie WYŁĄCZAM wysyłanie danych, żeby nie zapychać bufora
-            '<SET ID="ENABLE_SEND_DATA" STATE="0" />' 
+            '<SET ID="ENABLE_SEND_DATA" STATE="0" />'
         ]
-        
-        # Definicja kolumn CSV
+
+        # Definicja kolumn CSV. LPOG*/RPOG* to punkt spojrzenia oka lewego
+        # i prawego, LPOGV/RPOGV - flagi poprawności każdego z nich (potok
+        # analizy odrzuca próbkę na jednym oku nie unieważniając drugiego).
         self.csv_fields = [
-            'PC_TIME',   
-            'TIME',      
-            'TIME_TICK', 
-            'BPOGX', 
-            'BPOGY', 
+            'PC_TIME',
+            'TIME',
+            'TIME_TICK',
+            'LPOGX',
+            'LPOGY',
+            'LPOGV',
+            'RPOGX',
+            'RPOGY',
+            'RPOGV',
+            'BPOGX',
+            'BPOGY',
             'BPOGV'
         ]
 
@@ -75,6 +92,9 @@ class GazeTracker:
             # Wysyłam konfigurację wstępną i sprawdzam, czy została przyjęta -
             # odrzucone ENABLE_SEND_POG_BEST oznaczałoby puste kolumny BPOGX/BPOGY
             # w nagraniu, co bez tej kontroli wyszłoby dopiero na etapie analizy.
+            # Tak samo odrzucone ENABLE_SEND_POG_LEFT/RIGHT dałoby puste kolumny
+            # LPOG*/RPOG*, a potok analizy zszedłby po cichu do trybu jednoocznego
+            # na BPOG - stąd komunikat o błędzie już na etapie łączenia.
             for cmd in self.init_commands:
                 if self._send_command(cmd, expect_id=self._command_id(cmd)) is False:
                     print(f"[BLAD] Gazepoint odrzucil komende startowa: {cmd}")

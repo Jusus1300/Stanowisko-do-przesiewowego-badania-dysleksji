@@ -1,8 +1,15 @@
 # Analiza wprowadzenia obuocznej segmentacji I2MC
 
-Dokument odpowiada na dwa pytania: (1) czy postawiona diagnoza — że obecny potok
-analizuje jedno oko, a obuoczność I2MC nie jest wykorzystywana — jest prawdziwa,
-oraz (2) czy przejście na rzeczywistą analizę obuoczną zmieniłoby wyniki końcowe.
+> **Status: zmiana wdrożona.** Oba potoki — eksperymentalny (`gazepoint.py`,
+> `analysis_individual.py`) i analityczny (`analysis_core.py`,
+> `analysis_group.py`) — pracują obecnie obuocznie. Rozdziały 1–3 opisują stan
+> **sprzed** tej zmiany i stanowią jej uzasadnienie; rozdział 4 opisuje, co
+> zostało zrobione i co pozostaje do zrobienia (retrening modelu).
+> Zakres wdrożenia: §4, zmienione fragmenty kodu: §6.
+
+Dokument odpowiada na dwa pytania: (1) czy postawiona diagnoza — że potok
+analizuje jedno oko, a obuoczność I2MC nie jest wykorzystywana — była prawdziwa,
+oraz (2) czy przejście na rzeczywistą analizę obuoczną zmieni wyniki końcowe.
 
 Wszystkie liczby pochodzą ze skryptu `porownanie_obuoczne.py` uruchomionego na
 pięciu uczestnikach ETDD70 (T4 Meaningful Text: 1075, 1082, 1090, 1095, 1109),
@@ -12,10 +19,10 @@ po 12 powtórzeń na wariant, łącznie 240 przebiegów I2MC.
 
 ## 1. Potwierdzenie diagnozy
 
-`analysis_core.apply_i2mc_segmentation` (w. 118–132) buduje słownik wejściowy,
-w którym `L_X`/`L_Y` i `R_X`/`R_Y` wskazują na **tę samą tablicę** — sygnał oka
+Przed zmianą `analysis_core.apply_i2mc_segmentation` budował słownik wejściowy,
+w którym `L_X`/`L_Y` i `R_X`/`R_Y` wskazywały na **tę samą tablicę** — sygnał oka
 lewego pobrany w `analysis_group.process_single_subject` z kolumn `gaze_x_left`
-i `gaze_y_left`. Kolumny `gaze_x_right`/`gaze_y_right` nie są wczytywane w ogóle.
+i `gaze_y_left`. Kolumny `gaze_x_right`/`gaze_y_right` nie były wczytywane w ogóle.
 
 W bibliotece I2MC (wersja 2.2.8) taki słownik trafia do gałęzi `q2Eyes = True`
 (`I2MC.py`, w. 1455–1462), która:
@@ -28,7 +35,7 @@ W bibliotece I2MC (wersja 2.2.8) taki słownik trafia do gałęzi `q2Eyes = True
 Odporność na szum wynikająca z niezależnego grupowania dwóch oczu jest tu
 niemożliwa do uzyskania, bo niezależnych sygnałów nie ma.
 
-**Pomiar.** Porównano wariant obecny (`dup`) z uczciwie jednoocznym (`mono`,
+**Pomiar.** Porównano wariant sprzed zmiany (`dup`) z uczciwie jednoocznym (`mono`,
 do I2MC trafia tylko `L_X`/`L_Y`). Gdyby duplikacja cokolwiek wnosiła, wyniki
 musiałyby się różnić systematycznie. Nie różnią się:
 
@@ -76,7 +83,7 @@ Kierunek zmiany przy przejściu na obuoczne jest **systematycznie dodatni:
 
 Średnie z 12 ziaren RNG:
 
-| uczestnik | etykieta | `dup` (obecny) | `mono` | `mono_r` (prawe oko) | `bino` (obuoczny) | `bino` − `dup` |
+| uczestnik | etykieta | `dup` (przed zmianą) | `mono` | `mono_r` (prawe oko) | `bino` (obuoczny) | `bino` − `dup` |
 |---|---|---|---|---|---|---|
 | 1075 | non-dyslexic | 0,223 | 0,226 | 0,157 | 0,280 | **+0,057** |
 | 1082 | dyslexic | 0,949 | 0,950 | 0,917 | 0,971 | +0,022 |
@@ -210,27 +217,91 @@ wynik. Poprawka to jedna gałąź: `median_diff >= 1000` → mikrosekundy.
 
 ---
 
-## 4. Rekomendacja
+## 4. Stan wdrożenia i dalsze kroki
 
-1. **W obecnej wersji pracy** — ujawnić decyzję w §4.4.1 (tekst w §5 poniżej).
-   Analiza potwierdza, że sformułowanie „wykorzystanie niezależnych sygnałów obu
-   oczu pozostaje kierunkiem dalszego rozwoju" jest zgodne ze stanem faktycznym.
-2. **Nie wprowadzać obuoczności punktowo.** Zmiana jest tania w kodzie (§6), ale
-   pociąga za sobą przeliczenie 70 uczestników i retrening modelu. Wprowadzona bez
-   retreningu pogorszy wyniki, bo poda modelowi cechy z innego rozkładu.
-3. **Jeżeli jest czas na retrening** — zrobić to razem z §3.1 (odświeżenie CSV)
-   i §3.2 (ustawienie ziarna), bo bez determinizmu nie da się wykazać, że zmiana
-   metryk pochodzi z obuoczności, a nie z losowania. Wtedy porównanie
-   „jednooczny vs obuoczny" na pełnych 70 uczestnikach staje się samodzielnym,
-   mocnym wynikiem metodologicznym pracy.
-4. **Niezależnie od decyzji o obuoczności** — usunąć samą duplikację
-   (`'R_X': x_data`), bo w wariancie jednoocznym nie wnosi nic (0,005 wobec
-   0,017 szumu), a podwaja czas obliczeń. To zmiana bez wpływu na wyniki,
-   zgodna z narracją o optymalizacji z §4.4.5.
+Zmiana została wprowadzona w obu potokach (szczegóły w §6). Pozostaje retrening.
+
+**Zrobione:**
+
+1. **Potok eksperymentu** — `gazepoint.py` włącza `ENABLE_SEND_POG_LEFT`
+   i `ENABLE_SEND_POG_RIGHT` i zapisuje kolumny `LPOGX/LPOGY/LPOGV` oraz
+   `RPOGX/RPOGY/RPOGV`. Wcześniej rejestrowany był wyłącznie uśredniony przez
+   okulograf punkt `BPOG`, więc nawet po zmianie samej analizy nie byłoby z czego
+   odtworzyć dwóch niezależnych sygnałów. `BPOG` zostaje — służy do podglądu na
+   żywo i jako zapas.
+2. **Potok analizy** — `analysis_core.apply_i2mc_segmentation` podaje do I2MC
+   kanał prawego oka tylko wtedy, gdy źródło rzeczywiście zawiera drugi zapis;
+   `analysis_group` czyta `gaze_x_right`/`gaze_y_right` z ETDD70,
+   `analysis_individual` czyta `LPOG*`/`RPOG*` z nagrań GP3.
+3. **Filtr poprawności działa osobno na każdym oku** — próbka odrzucona na jednym
+   oku nie unieważnia drugiego (I2MC potrafi skorzystać z oka pozostałego).
+   W potoku indywidualnym uwzględniana jest przy tym flaga `POGV` z okulografu:
+   GP3 przy zgubionym oku podaje ostatnią znaną pozycję, która mieści się
+   w zakresie 0–1 i przeszłaby przez sam test zakresu.
+4. **Usunięta duplikacja** — w trybie jednoocznym (stare nagrania na `BPOG`,
+   pliki bez kolumn prawego oka) do I2MC trafia jeden kanał zamiast tego samego
+   sygnału wpisanego dwa razy. Nie zmienia to wyników (0,005 wobec 0,017 szumu),
+   a skraca segmentację o połowę — zgodnie z narracją o optymalizacji z §4.4.5.
+5. **Zgodność wstecz** — nagrania i pliki bez drugiego oka nadal działają,
+   schodząc do trybu jednoocznego z komunikatem w konsoli. Oko bez ani jednej
+   poprawnej próbki jest odrzucane, zamiast trafiać do I2MC jako kolumna samych
+   NaN (grupowanie takiego kanału przewróciłoby segmentację także dla oka
+   sprawnego).
+
+**Do zrobienia:**
+
+6. **Retrening modelu** — konieczny, nie opcjonalny. `model_config.json` zawiera
+   wagi i tabelę `STATS` wyznaczone na cechach jednoocznych; cechy obuoczne
+   pochodzą z innego rozkładu (przesunięcia do 0,79 SD, §2.3), więc dopóki model
+   nie zostanie przetrenowany, wyniki są policzone niespójnym modelem.
+   Kolejność: `analysis_group.run_analysis` na pełnym zbiorze →
+   `model_trainer.py --input <nowy CSV>` → przepisanie nowych wag do zestawu
+   awaryjnego w `analysis_core.calculate_risk_score`.
+7. **Rozważyć ustawienie ziarna RNG** (§3.2) przed retreningiem — bez
+   determinizmu nie da się wykazać, że zmiana metryk pochodzi z obuoczności,
+   a nie z losowej inicjalizacji k-means. Wtedy porównanie „jednooczny vs
+   obuoczny" na pełnych 70 uczestnikach staje się samodzielnym, mocnym wynikiem
+   metodologicznym pracy.
+8. **Zaktualizować §4.4.1 pracy** — akapit opisujący analizę jednooczną jest już
+   nieaktualny. Gotowy tekst po zmianie: §5 (wersja archiwalna: §5.1).
 
 ---
 
 ## 5. Tekst do §4.4.1
+
+Wersja **po wdrożeniu obuoczności** — do wstawienia w pracy:
+
+> **Obsługa sygnału obuocznego:** Zarówno zbiór referencyjny, jak i nagrania
+> z własnego stanowiska zawierają zapis z obu oczu, i oba sygnały są
+> wykorzystywane w segmentacji. Algorytm I2MC grupuje każde oko niezależnie,
+> a następnie uśrednia wagi grupowania — stąd bierze się jego odporność na szum
+> pomiarowy, ponieważ artefakt obecny w zapisie jednego oka nie ma
+> odpowiednika w drugim. Pozycje fiksacji wyznaczane są z punktu uśrednionego
+> z obu oczu. Próbka odrzucona jako niepoprawna na jednym oku nie unieważnia
+> drugiego: jeżeli w danym momencie widoczne jest tylko jedno oko, analiza
+> korzysta z sygnału dostępnego, a do trybu jednoocznego schodzi dopiero wtedy,
+> gdy drugie oko nie zawiera ani jednej poprawnej próbki. W przypadku okulografu
+> Gazepoint GP3 HD wymagało to włączenia przesyłania punktu spojrzenia osobno dla
+> każdego oka (LPOG, RPOG); rejestrowany równolegle uśredniony punkt spojrzenia
+> (BPOG) zachowano na potrzeby podglądu na żywo oraz jako zapas dla nagrań,
+> w których któreś z oczu nie było widoczne.
+
+Opcjonalne rozszerzenie, jeśli praca ma podawać wielkość efektu tej decyzji:
+
+> Wpływ przejścia z analizy jednoocznej na obuoczną zmierzono na pięciu
+> uczestnikach zbioru referencyjnego: cechy diagnostyczne przesuwają się
+> o maksymalnie 0,79 populacyjnego odchylenia standardowego, a wynik modelu
+> średnio o 0,04 (maksymalnie 0,10). Z tego powodu wagi modelu wyznaczono
+> ponownie na cechach policzonych w trybie obuocznym.
+
+*(Ostatnie zdanie dopisać dopiero po faktycznym retreningu — patrz §4, punkt 6.)*
+
+---
+
+### 5.1. Wersja archiwalna (sprzed zmiany)
+
+Akapit opisujący stan jednooczny, gdyby praca miała dokumentować wersję potoku
+sprzed wdrożenia:
 
 > **Obsługa sygnału obuocznego:** Zbiór referencyjny zawiera zapis z obu oczu.
 > W bieżącej wersji potoku do segmentacji wykorzystywany jest sygnał oka lewego,
@@ -241,72 +312,47 @@ wynik. Poprawka to jedna gałąź: `median_diff >= 1000` → mikrosekundy.
 > stanowi różnicę metodologiczną między obydwoma potokami i zostało uwzględnione
 > przy interpretacji wyników.
 
-Zdanie o BPOG jest zgodne z kodem: `gazepoint.py` włącza `ENABLE_SEND_POG_BEST`
-i zapisuje wyłącznie `BPOGX`/`BPOGY`/`BPOGV`, a `analysis_individual.py` (w. 18–19)
-czyta właśnie te kolumny. Potok indywidualny operuje więc na punkcie już
-uśrednionym przez okulograf — w tym sensie jest bliższy wariantowi `bino` niż
-obecnemu wariantowi grupowemu, co uzasadnia nazwanie tego różnicą metodologiczną.
-
-Opcjonalne rozszerzenie, jeśli praca ma podawać wielkość pominiętego efektu:
-
-> Wpływ tej decyzji zmierzono na pięciu uczestnikach zbioru referencyjnego:
-> przejście na rzeczywistą analizę obuoczną przesuwa cechy diagnostyczne o maksymalnie
-> 0,79 populacyjnego odchylenia standardowego, a wynik modelu średnio o 0,04
-> (maksymalnie 0,10), co wymagałoby ponownego wyznaczenia wag modelu.
+Zdanie o BPOG było zgodne z ówczesnym kodem: `gazepoint.py` włączał wyłącznie
+`ENABLE_SEND_POG_BEST` i zapisywał tylko `BPOGX`/`BPOGY`/`BPOGV`, a
+`analysis_individual.py` czytał właśnie te kolumny. Po zmianie różnica
+metodologiczna między potokami zniknęła — oba pracują na dwóch niezależnych
+sygnałach.
 
 ---
 
-## 6. Gotowa zmiana w kodzie (do zastosowania po decyzji o retreningu)
+## 6. Wdrożona zmiana w kodzie
 
-Zmiana jest odwracalna i mieści się w dwóch plikach.
+Sedno zmiany to kontrakt na kolumny wejściowe segmentacji. `apply_i2mc_segmentation`
+oczekuje w `DataFrame`:
 
-**`analysis_core.py`** — sekcja „4. Przygotowanie danych wejściowych"
-(zastępuje w. 117–132):
+| kolumna | znaczenie | wymagana |
+|---|---|---|
+| `x`, `y` | oko lewe (albo jedyny dostępny sygnał) | tak |
+| `x_prawe`, `y_prawe` | oko prawe | nie |
 
-```python
-    # 4. Przygotowanie danych wejściowych
-    time_data = df.index.values * sample_rate_ms
+Kanał prawego oka trafia do I2MC (`R_X`/`R_Y`) **tylko wtedy**, gdy te kolumny
+istnieją i zawierają choć jedną poprawną próbkę. W przeciwnym razie do algorytmu
+idzie jeden kanał — bez wpisywania tego samego sygnału po obu stronach, co
+wcześniej podwajało czas grupowania bez żadnego zysku. Tryb, w którym pracuje
+segmentacja, jest wypisywany w konsoli (`obuocznie` / `jednoocznie`), a w potoku
+indywidualnym trafia też do raportu tekstowego jako „Tryb segmentacji".
 
-    def _kanal(nazwa):
-        wartosci = df[nazwa].values.astype(float)
-        return np.where(np.isfinite(wartosci), wartosci, np.nan)
+Kto wypełnia te kolumny:
 
-    data = {'time': time_data, 'L_X': _kanal('x'), 'L_Y': _kanal('y')}
+- `analysis_group.process_single_subject` — z `gaze_x_left`/`gaze_y_left`
+  i `gaze_x_right`/`gaze_y_right` zbioru ETDD70,
+- `analysis_individual.run_analysis` — z `LPOGX`/`LPOGY` i `RPOGX`/`RPOGY`
+  nagrania GP3, a dla nagrań sprzed zmiany w `gazepoint.py` z uśrednionego
+  `BPOGX`/`BPOGY` (wtedy tryb jednooczny),
+- `gazepoint.py` — zapisuje `LPOG*`/`RPOG*` dzięki komendom
+  `ENABLE_SEND_POG_LEFT` i `ENABLE_SEND_POG_RIGHT`; bez nich GP3 wysyła sam
+  `BPOG` i drugiego sygnału nie da się odtworzyć na etapie analizy.
 
-    # Kanał prawego oka podawany jest tylko wtedy, gdy źródło rzeczywiście
-    # zawiera drugi, niezależny sygnał (ETDD70). Dla Gazepoint GP3 HD zapisywany
-    # jest już uśredniony punkt BPOG, więc do I2MC trafia jeden kanał: wpisanie
-    # tego samego sygnału po obu stronach nie dodaje informacji, a podwaja czas
-    # grupowania (zmierzone: 10,7 s wobec 5,5 s na uczestnika).
-    if 'x_prawe' in df.columns and df['x_prawe'].notna().any():
-        data['R_X'] = _kanal('x_prawe')
-        data['R_Y'] = _kanal('y_prawe')
-```
+Dokładny diff: `git show` na commicie wprowadzającym obuoczność.
 
-**`analysis_group.py`** — przygotowanie danych w `process_single_subject`
-(zastępuje w. 21–23 i 35–36):
-
-```python
-        clean_df = pd.DataFrame()
-        clean_df['x'] = df['gaze_x_left']
-        clean_df['y'] = df['gaze_y_left']
-        clean_df['x_prawe'] = df['gaze_x_right']
-        clean_df['y_prawe'] = df['gaze_y_right']
-```
-
-```python
-        # Filtr poprawności stosowany osobno do każdego oka: próbka odrzucona
-        # na jednym oku nie unieważnia drugiego, bo I2MC potrafi skorzystać
-        # z oka pozostałego (I2MC.average_eyes).
-        bledne_lewe = ~((clean_df['x'] > 1) & (clean_df['y'] > 1))
-        bledne_prawe = ~((clean_df['x_prawe'] > 1) & (clean_df['y_prawe'] > 1))
-        clean_df.loc[bledne_lewe, ['x', 'y']] = np.nan
-        clean_df.loc[bledne_prawe, ['x_prawe', 'y_prawe']] = np.nan
-```
-
-Po zastosowaniu obu fragmentów konieczna jest kolejność: przeliczenie zbioru
-(`analysis_group.run_analysis`) → `model_trainer.py --input <nowy CSV>` →
-aktualizacja zestawu awaryjnego w `analysis_core.calculate_risk_score`.
+Kolejność dalszych kroków: przeliczenie zbioru (`analysis_group.run_analysis`) →
+`model_trainer.py --input <nowy CSV>` → przepisanie nowych wag do zestawu
+awaryjnego w `analysis_core.calculate_risk_score`.
 
 ---
 

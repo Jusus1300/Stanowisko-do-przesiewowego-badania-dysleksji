@@ -77,6 +77,12 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
     # Wrapper dla biblioteki I2MC.
     # Przygotowuje dane, konfiguruje opcje i uruchamia algorytm.
     # Zwraca DataFrame z wykrytymi fiksacjami.
+    #
+    # Oczekuje DataFrame z kolumnami 'x'/'y' (oko lewe) i opcjonalnie
+    # 'x_prawe'/'y_prawe' (oko prawe). Gdy oba oczy są dostępne, I2MC grupuje
+    # każde z nich niezależnie i uśrednia wagi - stąd bierze się deklarowana
+    # odporność algorytmu na szum. Gdy dostępny jest jeden sygnał (np. już
+    # uśredniony przez okulograf punkt BPOG), algorytm pracuje jednoocznie.
 
     # 1. Obliczanie częstotliwości
     raw_freq = 1000.0 / sample_rate_ms
@@ -115,23 +121,33 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
     }
 
     # 4. Przygotowanie danych wejściowych
-    x_data = df['x'].values
-    y_data = df['y'].values
-    
-    x_data = np.where(np.isfinite(x_data), x_data, np.nan)
-    y_data = np.where(np.isfinite(y_data), y_data, np.nan)
-    
+    #
+    # Kolumny 'x'/'y' to sygnał oka lewego (albo jedyny dostępny sygnał),
+    # 'x_prawe'/'y_prawe' - opcjonalny sygnał oka prawego. Kanał prawego oka
+    # trafia do I2MC tylko wtedy, gdy źródło rzeczywiście zawiera drugi,
+    # niezależny zapis. Wpisanie tego samego sygnału po obu stronach nie dodaje
+    # informacji (I2MC pogrupowałby dwa razy te same dane i uśrednił dwa
+    # identyczne wyniki), a podwaja czas segmentacji.
     time_data = df.index.values * sample_rate_ms
-    
+
+    def to_channel(column_name):
+        values = df[column_name].values.astype(float)
+        return np.where(np.isfinite(values), values, np.nan)
+
     data = {
         'time': time_data,
-        'L_X': x_data,
-        'L_Y': y_data,
-        'R_X': x_data,
-        'R_Y': y_data, 
+        'L_X': to_channel('x'),
+        'L_Y': to_channel('y'),
     }
 
-    print(f"Uruchamianie biblioteki I2MC (freq={freq_nominal}Hz)...")
+    binocular = ('x_prawe' in df.columns and 'y_prawe' in df.columns
+                 and df['x_prawe'].notna().any())
+    if binocular:
+        data['R_X'] = to_channel('x_prawe')
+        data['R_Y'] = to_channel('y_prawe')
+
+    mode_label = "obuocznie" if binocular else "jednoocznie"
+    print(f"Uruchamianie biblioteki I2MC (freq={freq_nominal}Hz, {mode_label})...")
     
     try:
         # Uruchomienie I2MC

@@ -17,10 +17,21 @@ def process_single_subject(filepath, folder_path, generate_plots):
     try:
         df = pd.read_csv(filepath)
         
-        # Standaryzacja nazw kolumn i przygotowanie danych
+        # Standaryzacja nazw kolumn i przygotowanie danych.
+        # Zbiór ETDD70 zawiera zapis obuoczny - do segmentacji trafiają oba
+        # sygnały, żeby I2MC mógł grupować każde oko niezależnie. Starsze
+        # pliki bez kolumn prawego oka nadal działają (potok schodzi wtedy
+        # do trybu jednoocznego).
         clean_df = pd.DataFrame()
         clean_df['x'] = df['gaze_x_left']
         clean_df['y'] = df['gaze_y_left']
+
+        has_right_eye = {'gaze_x_right', 'gaze_y_right'} <= set(df.columns)
+        if has_right_eye:
+            clean_df['x_prawe'] = df['gaze_x_right']
+            clean_df['y_prawe'] = df['gaze_y_right']
+        else:
+            print(f"  -> {filename}: brak kolumn prawego oka, analiza jednooczna.")
 
         if 'time' in df.columns:
             sample_rate_ms = core.estimate_sample_rate_ms(df['time'], core.GROUP_EXPERIMENT_FREQ)
@@ -32,12 +43,37 @@ def process_single_subject(filepath, folder_path, generate_plots):
         # Brakujące/nieprawidłowe próbki oznaczamy jako NaN zamiast usuwać wiersze:
         # usunięcie wiersza przesuwa oś czasu, więc I2MC nigdy nie zobaczyłby luki
         # do interpolacji (patrz core.INTERP_MAX_GAP_MS).
-        invalid_mask = ~((clean_df['x'] > 1) & (clean_df['y'] > 1))
-        clean_df.loc[invalid_mask, ['x', 'y']] = np.nan
+        #
+        # Filtr poprawności stosowany jest osobno do każdego oka: próbka
+        # odrzucona na jednym oku nie unieważnia drugiego, bo I2MC potrafi
+        # skorzystać z oka pozostałego (I2MC.average_eyes).
+        invalid_left = ~((clean_df['x'] > 1) & (clean_df['y'] > 1))
+        clean_df.loc[invalid_left, ['x', 'y']] = np.nan
 
-        if clean_df['x'].notna().sum() == 0:
+        if has_right_eye:
+            invalid_right = ~((clean_df['x_prawe'] > 1) & (clean_df['y_prawe'] > 1))
+            clean_df.loc[invalid_right, ['x_prawe', 'y_prawe']] = np.nan
+
+        # Oko bez ani jednej poprawnej próbki wypada z analizy zamiast trafiać
+        # do I2MC jako kolumna samych NaN - grupowanie takiego kanału kończy
+        # się błędem i przewraca segmentację także dla oka sprawnego.
+        left_ok = clean_df['x'].notna().any()
+        right_ok = has_right_eye and clean_df['x_prawe'].notna().any()
+
+        if not left_ok and not right_ok:
             print(f"  -> Pominięto {filename} (brak poprawnych danych)")
             return None
+
+        if left_ok and not right_ok:
+            clean_df = clean_df[['x', 'y']]
+            if has_right_eye:
+                print(f"  -> {filename}: prawe oko bez poprawnych próbek, "
+                      f"analiza jednooczna (lewe).")
+        elif right_ok and not left_ok:
+            clean_df = clean_df[['x_prawe', 'y_prawe']].rename(
+                columns={'x_prawe': 'x', 'y_prawe': 'y'})
+            print(f"  -> {filename}: lewe oko bez poprawnych próbek, "
+                  f"analiza jednooczna (prawe).")
 
         # --- POTOK ANALIZY I2MC ---
         df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms)
