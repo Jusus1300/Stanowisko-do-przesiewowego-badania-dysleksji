@@ -1,0 +1,19 @@
+# Zaleznosci potoku eksperymentalnego i analitycznego.
+# Wersje sprawdzone na Pythonie 3.11.15 (patrz README, sekcja 2.3).
+# Instalacja: pip install -r requirements.txt
+
+# --- Analiza danych okulograficznych ---
+numpy>=1.24
+pandas>=2.0
+matplotlib>=3.7
+I2MC>=2.2.8          # segmentacja fiksacji; ciagnie za soba scipy
+scikit-learn>=1.3    # model_trainer.py: regresja logistyczna + kroswalidacja
+
+# --- Stanowisko badawcze ---
+pygame>=2.5          # prezentacja bodzcow i zadanie sakadowe
+Pillow>=10.0         # tlo okien Tkinter
+screeninfo>=0.8      # wykrywanie monitorow
+OneEuroFilter>=0.2.1 # wygladzanie kursora wzroku w podgladzie na zywo
+
+# Uwaga: tkinter nie instaluje sie przez pip - na Linuksie doinstaluj
+# pakiet systemowy python3-tk (Debian/Ubuntu) lub python3-tkinter (Fedora).
