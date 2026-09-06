@@ -22,6 +22,21 @@ INTERP_MAX_GAP_MS = 100
 WINDOW_SIZE_MS = 200
 MIN_FIX_DURATION_MS = 40
 
+# Ziarno generatora liczb losowych używanego przez I2MC.
+#
+# Grupowanie 2-means w I2MC startuje z inicjalizacji kmeans++, która losuje
+# centroidy startowe (I2MC.kmeans2 woła np.random.randint i np.random.rand
+# bez ustawionego ziarna). Bez ustalonego ziarna ten sam plik daje przy każdym
+# uruchomieniu inny wynik: zaobserwowany rozstęp oceny ryzyka dla jednego
+# uczestnika sięgał 0,13, czyli więcej niż różnica między analizą jednooczną
+# a obuoczną. Wyników nie dałoby się wtedy odtworzyć ani porównać między
+# wersjami potoku.
+#
+# Wartość None przywraca zachowanie losowe - przydatne wyłącznie wtedy, gdy
+# celem jest zmierzenie rozrzutu między przebiegami (patrz
+# porownanie_obuoczne.py, które losowością steruje samodzielnie).
+I2MC_RANDOM_SEED = 42
+
 def px_to_dva(px_distance):
     # Konwertuje dystans w pikselach na stopnie kąta widzenia (DVA).
     cm_per_px = SCREEN_WIDTH_CM / SCREEN_WIDTH
@@ -72,11 +87,37 @@ def estimate_sample_rate_ms(time_values, fallback_freq_hz):
               f"{fallback_freq_hz} Hz.")
         return 1000.0 / fallback_freq_hz
 
+def run_i2mc(data, opt):
+
+    # Uruchamia I2MC z ustalonym ziarnem generatora losowego (logging=False
+    # wycisza printy biblioteki).
+    #
+    # I2MC losuje centroidy startowe z globalnego generatora numpy, więc ziarno
+    # trzeba ustawić przed wywołaniem. Poprzedni stan generatora jest
+    # odtwarzany po zakończeniu, żeby segmentacja nie zmieniała po cichu
+    # losowości w kodzie wywołującym - istotne przy analizie grupowej, gdzie
+    # jeden proces roboczy przetwarza wielu uczestników po kolei.
+    if I2MC_RANDOM_SEED is None:
+        return I2MC.I2MC(data, opt, logging=False)
+
+    rng_state = np.random.get_state()
+    try:
+        np.random.seed(I2MC_RANDOM_SEED)
+        return I2MC.I2MC(data, opt, logging=False)
+    finally:
+        np.random.set_state(rng_state)
+
 def apply_i2mc_segmentation(df, sample_rate_ms):
 
     # Wrapper dla biblioteki I2MC.
     # Przygotowuje dane, konfiguruje opcje i uruchamia algorytm.
     # Zwraca DataFrame z wykrytymi fiksacjami.
+    #
+    # Oczekuje DataFrame z kolumnami 'x'/'y' (oko lewe) i opcjonalnie
+    # 'x_prawe'/'y_prawe' (oko prawe). Gdy oba oczy są dostępne, I2MC grupuje
+    # każde z nich niezależnie i uśrednia wagi - stąd bierze się deklarowana
+    # odporność algorytmu na szum. Gdy dostępny jest jeden sygnał (np. już
+    # uśredniony przez okulograf punkt BPOG), algorytm pracuje jednoocznie.
 
     # 1. Obliczanie częstotliwości
     raw_freq = 1000.0 / sample_rate_ms
@@ -115,29 +156,38 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
     }
 
     # 4. Przygotowanie danych wejściowych
-    x_data = df['x'].values
-    y_data = df['y'].values
-    
-    x_data = np.where(np.isfinite(x_data), x_data, np.nan)
-    y_data = np.where(np.isfinite(y_data), y_data, np.nan)
-    
+    #
+    # Kolumny 'x'/'y' to sygnał oka lewego (albo jedyny dostępny sygnał),
+    # 'x_prawe'/'y_prawe' - opcjonalny sygnał oka prawego. Kanał prawego oka
+    # trafia do I2MC tylko wtedy, gdy źródło rzeczywiście zawiera drugi,
+    # niezależny zapis. Wpisanie tego samego sygnału po obu stronach nie dodaje
+    # informacji (I2MC pogrupowałby dwa razy te same dane i uśrednił dwa
+    # identyczne wyniki), a podwaja czas segmentacji.
     time_data = df.index.values * sample_rate_ms
-    
+
+    def to_channel(column_name):
+        values = df[column_name].values.astype(float)
+        return np.where(np.isfinite(values), values, np.nan)
+
     data = {
         'time': time_data,
-        'L_X': x_data,
-        'L_Y': y_data,
-        'R_X': x_data,
-        'R_Y': y_data, 
+        'L_X': to_channel('x'),
+        'L_Y': to_channel('y'),
     }
 
-    print(f"Uruchamianie biblioteki I2MC (freq={freq_nominal}Hz)...")
+    binocular = ('x_prawe' in df.columns and 'y_prawe' in df.columns
+                 and df['x_prawe'].notna().any())
+    if binocular:
+        data['R_X'] = to_channel('x_prawe')
+        data['R_Y'] = to_channel('y_prawe')
+
+    mode_label = "obuocznie" if binocular else "jednoocznie"
+    print(f"Uruchamianie biblioteki I2MC (freq={freq_nominal}Hz, {mode_label})...")
     
     try:
         # Uruchomienie I2MC
-        # logging=False wycisza printy biblioteki
-        res = I2MC.I2MC(data, opt, logging=False)
-        
+        res = run_i2mc(data, opt)
+
         # === OBSŁUGA RÓŻNYCH TYPÓW ZWRACANYCH DANYCH ===
         
         # Przypadek 1: Tuple (krotka) - [dict, DataFrame, dict]
