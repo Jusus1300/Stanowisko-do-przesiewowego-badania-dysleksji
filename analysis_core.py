@@ -1,7 +1,9 @@
 import pandas as pd
 import numpy as np
 import I2MC
+import contextlib
 import traceback
+import warnings
 import json
 import os
 
@@ -88,6 +90,38 @@ def estimate_sample_rate_ms(time_values, fallback_freq_hz):
               f"{fallback_freq_hz} Hz.")
         return 1000.0 / fallback_freq_hz
 
+@contextlib.contextmanager
+def _quiet_empty_slice_warnings():
+
+    # Wycisza dwa ostrzeżenia numpy generowane wewnątrz biblioteki I2MC
+    # (I2MC.get_fix_stats, linia "RMSxy[a] = np.sqrt(np.mean(c))"):
+    #
+    #   RuntimeWarning: Mean of empty slice.
+    #   RuntimeWarning: invalid value encountered in scalar divide
+    #
+    # Oba pochodzą z jednego wywołania np.mean() na pustej tablicy. I2MC liczy
+    # tam miary precyzji fiksacji (RMSxy, BCEA) wyłącznie z próbek realnych, więc
+    # dla fiksacji złożonej w całości z próbek interpolowanych - albo mającej mniej
+    # niż dwie realne próbki - różnice międzypróbkowe są pustym wektorem. Wynikiem
+    # jest RMSxy = NaN, czyli "brak danych o precyzji", i taką samą wartość
+    # biblioteka wpisuje jawnie w sąsiednich gałęziach (BCEA, fixRangeX/Y).
+    #
+    # Dla naszego potoku jest to nieszkodliwe: z tabeli fiksacji korzystamy tylko
+    # z kolumn xpos/ypos/dur/startT/endT (patrz classify_movements), a kolumn
+    # precyzji nie używamy w żadnej cesze diagnostycznej. Ostrzeżenie nie
+    # sygnalizuje więc błędu analizy - zasypuje tylko konsolę analizy grupowej,
+    # gdzie każdy z kilkudziesięciu procesów roboczych wypisuje je niezależnie.
+    #
+    # Filtr jest celowo wąski: wycisza dwa konkretne komunikaty i tylko na czas
+    # wywołania I2MC, więc inne ostrzeżenia (w tym nasze własne) nadal docierają
+    # do użytkownika.
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=RuntimeWarning,
+                                message='Mean of empty slice')
+        warnings.filterwarnings('ignore', category=RuntimeWarning,
+                                message='invalid value encountered in scalar divide')
+        yield
+
 def run_i2mc(data, opt):
 
     # Uruchamia I2MC z ustalonym ziarnem generatora losowego (logging=False
@@ -99,12 +133,14 @@ def run_i2mc(data, opt):
     # losowości w kodzie wywołującym - istotne przy analizie grupowej, gdzie
     # jeden proces roboczy przetwarza wielu uczestników po kolei.
     if I2MC_RANDOM_SEED is None:
-        return I2MC.I2MC(data, opt, logging=False)
+        with _quiet_empty_slice_warnings():
+            return I2MC.I2MC(data, opt, logging=False)
 
     rng_state = np.random.get_state()
     try:
         np.random.seed(I2MC_RANDOM_SEED)
-        return I2MC.I2MC(data, opt, logging=False)
+        with _quiet_empty_slice_warnings():
+            return I2MC.I2MC(data, opt, logging=False)
     finally:
         np.random.set_state(rng_state)
 
