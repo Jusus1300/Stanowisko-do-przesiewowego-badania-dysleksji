@@ -52,7 +52,8 @@ def estimate_sample_rate_ms(time_values, fallback_freq_hz):
     # rzeczywistych znaczników czasu z pliku źródłowego (np. kolumna 'time'
     # w zbiorze ETDD70 albo 'TIME' w eksporcie z Gazepoint). Częstotliwość
     # to mediana odstępów między kolejnymi próbkami - odporna na pojedyncze
-    # zdegenerowane wpisy (duplikaty, cofnięcia zegara).
+    # zdegenerowane wpisy (duplikaty, cofnięcia zegara). Jednostka znaczników
+    # (s / ms / us / ns) jest rozpoznawana automatycznie - patrz niżej.
     #
     # Wyznaczona wartość jest używana tylko do policzenia jednego skalara
     # (okres próbkowania); sama kolumna czasu nie jest dalej przenoszona
@@ -72,16 +73,46 @@ def estimate_sample_rate_ms(time_values, fallback_freq_hz):
             raise ValueError("zbyt mało poprawnych znaczników czasu")
 
         median_diff = float(np.median(diffs))
-        # Autodetekcja jednostki: znaczniki w sekundach dają odstępy rzędu
-        # 0.001-0.05, znaczniki w milisekundach - odstępy rzędu 1-50.
-        median_diff_ms = median_diff * 1000.0 if median_diff < 1.0 else median_diff
 
-        detected_freq = 1000.0 / median_diff_ms
-        if not (20.0 <= detected_freq <= 2000.0):
-            raise ValueError(f"nierealistyczna częstotliwość ({detected_freq:.1f} Hz)")
+        # Autodetekcja jednostki znaczników czasu. Nie da się jej odczytać z
+        # samego pliku, bo źródła zapisują czas w różnych jednostkach: Gazepoint
+        # (kolumna 'TIME') podaje sekundy od startu nagrania, ETDD70 (kolumna
+        # 'time') - mikrosekundy, a eksporty z innych okulografów najczęściej
+        # milisekundy. Jednostkę wybieramy więc po tym, która daje realistyczną
+        # częstotliwość próbkowania.
+        #
+        # Rozstrzygnięcie jest jednoznaczne: dopuszczalny zakres 20-2000 Hz to
+        # okres 0,5-50 ms, czyli rozpiętość 100x, a kolejne jednostki dzieli
+        # 1000x - do zakresu może pasować co najwyżej jedna z nich.
+        #
+        # Nanosekundy uwzględniamy, bo tyle daje kolumna czasu przepuszczona
+        # przez pandas jako datetime64[ns] i skonwertowana na liczby.
+        candidate_units = (
+            ('s', 1000.0),
+            ('ms', 1.0),
+            ('us', 0.001),
+            ('ns', 0.000001),
+        )
+
+        detected = None
+        for unit_name, unit_to_ms in candidate_units:
+            candidate_diff_ms = median_diff * unit_to_ms
+            candidate_freq = 1000.0 / candidate_diff_ms
+            if 20.0 <= candidate_freq <= 2000.0:
+                detected = (unit_name, candidate_diff_ms, candidate_freq)
+                break
+
+        if detected is None:
+            raise ValueError(
+                f"mediana odstępu między próbkami ({median_diff:.6g}) nie daje "
+                f"realistycznej częstotliwości w żadnej ze znanych jednostek "
+                f"czasu (s/ms/us/ns)")
+
+        unit_name, median_diff_ms, detected_freq = detected
 
         print(f"Automatycznie wykryta częstotliwość próbkowania: {detected_freq:.2f} Hz "
-              f"(mediana odstępu między próbkami: {median_diff_ms:.3f} ms)")
+              f"(mediana odstępu między próbkami: {median_diff:.6g} {unit_name} = "
+              f"{median_diff_ms:.3f} ms)")
         return median_diff_ms
 
     except Exception as e:
