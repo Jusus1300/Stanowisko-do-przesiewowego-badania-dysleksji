@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import analysis_core as core
+import screen_geometry
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import os
@@ -12,7 +13,21 @@ def run_analysis(file_path):
     try:
         # Wczytanie danych
         df = pd.read_csv(file_path)
-        
+        input_dir = os.path.dirname(file_path)
+
+        # 0. Geometria stanowiska, na którym powstało nagranie.
+        #
+        # GP3 podaje współrzędne znormalizowane do rozmiaru ekranu (0-1), więc
+        # to geometria decyduje, na jaką liczbę pikseli, a dalej na ile stopni
+        # kąta widzenia, przelicza się każdy ruch oka. Wcześniej potok mnożył
+        # je przez stałe ekranu zbioru ETDD70 (1680x1050, 47,4 cm), czyli
+        # przez parametry zupełnie innego stanowiska - wynik był systematycznie
+        # przeskalowany, a I2MC dostawał xres/yres niezgodne z danymi.
+        # Parametry bierzemy więc z pliku zapisanego przy nagraniu, a gdy go
+        # brak - z experiment_config.py (patrz screen_geometry.for_recording).
+        screen = screen_geometry.for_recording(input_dir)
+        print(f"Geometria ekranu nagrania: {screen.describe()}")
+
         # 1. Przygotowanie sygnału
         #
         # Nagrania z GP3 zawierają punkt spojrzenia osobno dla każdego oka
@@ -25,15 +40,15 @@ def run_analysis(file_path):
 
         clean_df = pd.DataFrame()
         if has_both_eyes:
-            clean_df['x'] = df['LPOGX'] * core.SCREEN_WIDTH
-            clean_df['y'] = df['LPOGY'] * core.SCREEN_HEIGHT
-            clean_df['x_prawe'] = df['RPOGX'] * core.SCREEN_WIDTH
-            clean_df['y_prawe'] = df['RPOGY'] * core.SCREEN_HEIGHT
+            clean_df['x'] = df['LPOGX'] * screen.width_px
+            clean_df['y'] = df['LPOGY'] * screen.height_px
+            clean_df['x_prawe'] = df['RPOGX'] * screen.width_px
+            clean_df['y_prawe'] = df['RPOGY'] * screen.height_px
         else:
             print("Brak kolumn LPOG*/RPOG* - nagranie sprzed przejścia na zapis "
                   "obuoczny. Analiza jednooczna na uśrednionym punkcie BPOG.")
-            clean_df['x'] = df['BPOGX'] * core.SCREEN_WIDTH
-            clean_df['y'] = df['BPOGY'] * core.SCREEN_HEIGHT
+            clean_df['x'] = df['BPOGX'] * screen.width_px
+            clean_df['y'] = df['BPOGY'] * screen.height_px
 
         if 'TIME' in df.columns:
             sample_rate_ms = core.estimate_sample_rate_ms(df['TIME'], EYETRACKER_FREQ)
@@ -93,7 +108,7 @@ def run_analysis(file_path):
             tryb_segmentacji = "jednooczny - prawe oko (lewe bez poprawnych próbek)"
 
         # 2. Segmentacja - Wywołanie I2MC
-        df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms)
+        df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms, screen)
         
         # 3. Klasyfikacja ruchów i scalanie
         events = core.classify_movements(df_segmented, sample_rate_ms)
@@ -101,8 +116,7 @@ def run_analysis(file_path):
         # Generowanie wizualizacji
         viz_status = "Nie wygenerowano wykresu."
         try:
-            input_dir = os.path.dirname(file_path)
-            img_filename = "zrzut_ekranu_bodzca.png"
+            img_filename = screen_geometry.STIMULUS_SCREENSHOT
             img_path = os.path.join(input_dir, img_filename)
             foldername = os.path.basename(os.path.dirname(file_path))
             output_plot_path = os.path.join(input_dir, f"#scanpath_{foldername}.png")
@@ -113,11 +127,11 @@ def run_analysis(file_path):
             # Wczytanie tła
             if os.path.exists(img_path):
                 img = mpimg.imread(img_path)
-                plt.imshow(img, extent=[0, core.SCREEN_WIDTH, core.SCREEN_HEIGHT, 0])
+                plt.imshow(img, extent=[0, screen.width_px, screen.height_px, 0])
             else:
-                plt.xlim(0, core.SCREEN_WIDTH)
-                plt.ylim(core.SCREEN_HEIGHT, 0)
-                plt.text(core.SCREEN_WIDTH/2, core.SCREEN_HEIGHT/2, 
+                plt.xlim(0, screen.width_px)
+                plt.ylim(screen.height_px, 0)
+                plt.text(screen.width_px/2, screen.height_px/2, 
                          "Brak pliku tła", ha='center', va='center')
 
             # Rysowanie fiksacji i ścieżki
@@ -150,7 +164,7 @@ def run_analysis(file_path):
             viz_status = f"Błąd wizualizacji: {str(viz_e)}"
 
         # 4. Cechy
-        features = core.calculate_features(events, sample_rate_ms)
+        features = core.calculate_features(events, sample_rate_ms, screen)
         
         # 5. Model
         diagnosis = core.calculate_risk_score(features)
@@ -179,6 +193,7 @@ def run_analysis(file_path):
             f"Plik: {file_path}\n"
             f"Wykrytych fiksacji: {len([e for e in events if e['type'] == 'FIX'])}\n"
             f"Częstotliwość próbkowania: {sample_rate_ms:.2f} ms\n"
+            f"Geometria ekranu: {screen.describe()}\n"
             f"Tryb segmentacji: {tryb_segmentacji}\n"
             f"Status wizualizacji: {viz_status}\n"
             f"------------------------------------\n"
