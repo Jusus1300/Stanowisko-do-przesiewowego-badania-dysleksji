@@ -85,8 +85,8 @@ python analysis_main.py
 Otwiera GUI z wyborem analizy indywidualnej (pojedynczy plik CSV z nagrania) lub
 grupowej (katalog z plikami `Subject_*_raw.csv`).
 
-Geometrię ekranu każda z analiz bierze z odpowiedniego źródła (patrz
-`screen_geometry.py`):
+Geometrię ekranu każda z analiz bierze z odpowiedniego źródła (patrz sekcja
+GEOMETRIA EKRANU NAGRANIA w `experiment_config.py`):
 
 * analiza indywidualna - z pliku `parametry_ekranu.json` w folderze nagrania,
   a gdy go brak (nagrania sprzed wprowadzenia tego pliku) - z `experiment_config.py`,

@@ -1,11 +1,10 @@
 import pandas as pd
 import numpy as np
 import analysis_core as core
-import screen_geometry
+import experiment_config as cfg
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import os
-from experiment_config import EYETRACKER_FREQ
 
 def run_analysis(file_path):
     print(f"Rozpoczynanie analizy indywidualnej (Algorytm I2MC) dla: {file_path}")
@@ -24,8 +23,8 @@ def run_analysis(file_path):
         # przez parametry zupełnie innego stanowiska - wynik był systematycznie
         # przeskalowany, a I2MC dostawał xres/yres niezgodne z danymi.
         # Parametry bierzemy więc z pliku zapisanego przy nagraniu, a gdy go
-        # brak - z experiment_config.py (patrz screen_geometry.for_recording).
-        screen = screen_geometry.for_recording(input_dir)
+        # brak - z experiment_config.py (patrz cfg.screen_for_recording).
+        screen = cfg.screen_for_recording(input_dir)
         print(f"Geometria ekranu nagrania: {screen.describe()}")
 
         # 1. Przygotowanie sygnału
@@ -51,11 +50,11 @@ def run_analysis(file_path):
             clean_df['y'] = df['BPOGY'] * screen.height_px
 
         if 'TIME' in df.columns:
-            sample_rate_ms = core.estimate_sample_rate_ms(df['TIME'], EYETRACKER_FREQ)
+            sample_rate_ms = core.estimate_sample_rate_ms(df['TIME'], cfg.EYETRACKER_FREQ)
         else:
             print(f"Brak kolumny 'TIME' w pliku, używam domyślnej częstotliwości "
-                  f"{EYETRACKER_FREQ} Hz.")
-            sample_rate_ms = 1000.0 / EYETRACKER_FREQ
+                  f"{cfg.EYETRACKER_FREQ} Hz.")
+            sample_rate_ms = 1000.0 / cfg.EYETRACKER_FREQ
 
         # Brakujące/nieprawidłowe próbki (poza zakresem ekranu) oznaczamy jako NaN
         # zamiast usuwać wiersze: usunięcie wiersza przesuwa oś czasu, więc I2MC
@@ -116,7 +115,7 @@ def run_analysis(file_path):
         # Generowanie wizualizacji
         viz_status = "Nie wygenerowano wykresu."
         try:
-            img_filename = screen_geometry.STIMULUS_SCREENSHOT
+            img_filename = cfg.STIMULUS_SCREENSHOT
             img_path = os.path.join(input_dir, img_filename)
             foldername = os.path.basename(os.path.dirname(file_path))
             output_plot_path = os.path.join(input_dir, f"#scanpath_{foldername}.png")

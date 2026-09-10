@@ -3,7 +3,7 @@ import numpy as np
 import os
 import glob
 import analysis_core as core
-import screen_geometry
+import experiment_config as cfg
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
@@ -143,7 +143,7 @@ def process_single_subject(filepath, folder_path, generate_plots, screen):
         print(f"  -> Błąd pliku {filename}: {e}")
         return None
 
-def run_analysis(folder_path, generate_plots=True, screen=screen_geometry.ETDD70_SCREEN):
+def run_analysis(folder_path, generate_plots=True, screen=cfg.ETDD70_SCREEN):
 
     # Analiza grupowa pracuje na plikach 'Subject_*_raw.csv' ze zbioru ETDD70,
     # których współrzędne są zapisane w pikselach ekranu użytego przy jego
