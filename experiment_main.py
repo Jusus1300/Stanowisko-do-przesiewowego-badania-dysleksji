@@ -1,3 +1,6 @@
+# Przebieg badania od początku do końca: kalibracja, czytanie tekstu, pytanie
+# sprawdzające i zadanie sakadowe. Wyniki lądują w folderze uczestnika.
+
 import sys
 import os
 import csv
@@ -8,6 +11,7 @@ import experiment_module as exp
 import experiment_config as cfg
 
 def save_behavioral_result(filepath, trial_num, result):
+    # Dopisuje wiersz, nagłówek tylko przy pierwszym zapisie.
     file_exists = os.path.exists(filepath)
     with open(filepath, 'a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
@@ -28,6 +32,8 @@ def main():
         sys.exit()
     
     try:
+        # Kryptonim trafia do nazwy folderu, więc przepuszczamy tylko znaki
+        # bezpieczne dla systemu plików.
         clean_participant_id = "".join(c for c in participant_id if c.isalnum() or c in ('_','-')).rstrip()
         timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         folder_name = f"{clean_participant_id}_{timestamp_str}"
@@ -36,10 +42,9 @@ def main():
         print(f"[INFO] Wyniki zostaną zapisane w folderze: {participant_folder}")
         behavioral_path = os.path.join(participant_folder, cfg.BEHAVIORAL_RESULTS_FILENAME)
 
-        # Geometria stanowiska zapisywana razem z danymi. Analiza przelicza
-        # współrzędne GP3 (znormalizowane do rozmiaru ekranu) na piksele i dalej
-        # na stopnie kąta widzenia, więc bez tych parametrów musiałaby zakładać,
-        # że konfiguracja stanowiska nie zmieniła się od czasu nagrania.
+        # Geometria ekranu zapisywana razem z danymi - analiza przelicza
+        # znormalizowane współrzędne GP3 na piksele i dalej na DVA, więc bez tego
+        # musiałaby zakładać, że stanowisko nie zmieniło się od czasu badania.
         station_screen, edid_width_cm = cfg.detect_station_screen(selected_monitor)
         cfg.save_screen_geometry(station_screen, participant_folder, edid_width_cm)
         print(f"[INFO] Parametry ekranu nagrania: {station_screen.describe()}")
@@ -53,6 +58,8 @@ def main():
             monitor_index=selected_monitor
         )
         
+        # Kalibracja prowadzi Gazepoint Control, my tylko czekamy na potwierdzenie
+        # operatora.
         tracker.connect()
         tracker.calibrate()
         ui.wait_for_calibration_confirmation()
@@ -67,6 +74,7 @@ def main():
         
         experiment = exp.PygameExperiment(tracker, selected_monitor, participant_folder)
         
+        # Właściwa część badania
         experiment.run_reading_screen()
         
         result = experiment.run_question_screen()
@@ -91,6 +99,7 @@ def main():
     except Exception as e:
         print(f"[BŁĄD KRYTYCZNY] Wystąpił nieoczekiwany błąd: {e}")
     finally:
+        # Gniazdo i pliki trzeba zamknąć także wtedy, gdy badanie przerwał błąd.
         if 'tracker' in locals() and tracker is not None:
             tracker.close()
         print("[INFO] Aplikacja została zamknięta.")

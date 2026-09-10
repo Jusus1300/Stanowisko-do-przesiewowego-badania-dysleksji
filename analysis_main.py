@@ -1,10 +1,11 @@
+# Punkt wejścia części analitycznej: spina GUI z dwoma trybami analizy.
+
 import analysis_individual
 import analysis_group
 import tkinter_module as ui
 
 class AnalysisController:
     def __init__(self):
-        # Inicjalizacja GUI z przekazaniem funkcji (callbacków) do przycisków
         self.gui = ui.AnalysisGUI(
             run_individual_callback=self.run_individual,
             run_group_callback=self.run_group
@@ -17,12 +18,11 @@ class AnalysisController:
         )
         if filepath:
             self.gui.set_status("Przetwarzanie...")
+            # Analiza blokuje pętlę Tk, więc status trzeba przerysować wcześniej.
             self.gui.refresh()
             
-            # Wywołanie logiki analizy
             report = analysis_individual.run_analysis(filepath)
             
-            # Aktualizacja UI
             self.gui.show_report_window(report)
             self.gui.set_status("Zakończono")
 
@@ -32,10 +32,8 @@ class AnalysisController:
             self.gui.set_status("Przetwarzanie grupy...")
             self.gui.refresh()
             
-            # Wywołanie logiki analizy
             result_msg = analysis_group.run_analysis(folderpath)
             
-            # Aktualizacja UI
             ui.show_info("Wynik Analizy Grupowej", result_msg)
             self.gui.set_status("Zakończono")
 

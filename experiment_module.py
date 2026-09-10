@@ -1,3 +1,6 @@
+# Ekrany eksperymentu rysowane w pygame: tekst do czytania, pytanie sprawdzające
+# i gra z celem. Każdy ekran sam włącza i wyłącza rejestrację w GazeTracker.
+
 import pygame
 import sys
 import random
@@ -12,7 +15,7 @@ class PygameExperiment:
         self.participant_folder = participant_folder
         
         pygame.init()
-        # Używam flag HWSURFACE i DOUBLEBUF dla płynności
+        # HWSURFACE + DOUBLEBUF, żeby bodziec nie migotał przy przerysowaniu.
         self.screen_flags = pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
         self.screen = pygame.display.set_mode(
             (cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT), 
@@ -21,34 +24,34 @@ class PygameExperiment:
         )
         pygame.display.set_caption("Eksperyment")
         
-        # Ładowanie grafik
         try:
             background = pygame.image.load(cfg.BACKGROUND_IMG).convert()
             self.background = pygame.transform.scale(background, (cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT))
             
             target = pygame.image.load(cfg.TARGET_IMG).convert_alpha()
             self.target = pygame.transform.scale(target, (cfg.TARGET_WIDTH, cfg.TARGET_HEIGHT))
+        # Brak grafik nie przerywa badania - zostają kolory z konfiguracji.
         except pygame.error as e:
             print(f"[WARN] Błąd ładowania grafiki: {e}. Program będzie działał bez grafik.")
             self.background = None
             self.target = None
 
     def _draw_background(self):
-        # Pomocnicza funkcja do rysowania tła, aby nie powielać kodu.
         if self.background:
             self.screen.blit(self.background, (0, 0))
         else:
             self.screen.fill(cfg.BACKGROUND_COLOR)
 
     def _draw_text(self, surface, text, font_path, base_font_size, color, center_pos):
-        # Pomocnicza funkcja do renderowania wielowierszowego tekstu z automatycznym skalowaniem
-        # oraz dynamicznym, ciemnoszarym tłem.
+        # Tekst wielowierszowy na ciemnym prostokącie, z czcionką dobieraną tak,
+        # żeby całość zmieściła się w marginesach ekranu.
         max_width = cfg.SCREEN_WIDTH * (1.0 - cfg.HORIZONTAL_MARGIN_PERCENT)
         max_height = cfg.SCREEN_HEIGHT * (1.0 - cfg.VERTICAL_MARGIN_PERCENT)
         
         font_size = base_font_size
         
-        # Pętla dopasowująca rozmiar czcionki
+        # Zmniejszamy czcionkę, aż tekst zmieści się na wysokość (albo zejdziemy
+        # do 12 px - niżej i tak byłby nieczytelny).
         while True:
             try:
                 font = pygame.font.Font(font_path, font_size)
@@ -80,42 +83,38 @@ class PygameExperiment:
             
         line_surfaces = [font.render(line, True, color) for line in lines]
         
-        # RYSOWANIE CIEMNOSZAREGO TŁA POD TEKSTEM
+        # Pudełko pod tekstem: półprzezroczyste, dopasowane do najdłuższej linii.
         if lines:
-            # Szukam szerokości najszerszej linii tekstu
             max_line_width = max([font.size(line)[0] for line in lines])
             
-            # Marginesy wewnątrz ciemnego pudełka (w pikselach)
             padding_x = 100
             padding_y = 80
             
             box_width = max_line_width + padding_x
             box_height = total_height + padding_y
             
-            # Tworzę powierzchnię obsługującą przezroczystość (SRCALPHA)
-            bg_rect_surface = pygame.Surface((box_width, box_height), pygame.SRCALPHA)
+            bg_rect_surface = pygame.Surface((box_width, box_height), pygame.SRCALPHA)  # SRCALPHA = przezroczystość
             bg_rect_surface.fill((40, 40, 40, 225)) 
             
-            # Rysuję obramowanie dla estetyki
             pygame.draw.rect(bg_rect_surface, (100, 100, 100, 255), bg_rect_surface.get_rect(), 2, border_radius=10)
             
-            # Pobieram pozycję centrum i rysuję na głównym ekranie
             bg_rect = bg_rect_surface.get_rect(center=center_pos)
             surface.blit(bg_rect_surface, bg_rect)
 
-        # Renderowanie linii tekstu
         top_y = center_pos[1] - total_height / 2
         for i, line_surface in enumerate(line_surfaces):
             line_rect = line_surface.get_rect(centerx=center_pos[0], top=top_y + i * line_height)
             surface.blit(line_surface, line_rect)
 
     def _wait_for_keypress(self, key_to_continue):
+        # Blokuje ekran do wciśnięcia klawisza. ESC kończy badanie awaryjnie -
+        # zamykamy wtedy gniazdo, żeby nie zostawić otwartego pliku nagrania.
         pygame.mouse.set_visible(False)
         waiting = True
         while waiting:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
-                    self.tracker.close() # Bezpiecznik
+                    self.tracker.close()
                     sys.exit()
                 if event.type == pygame.KEYDOWN and event.key == key_to_continue:
                     waiting = False
@@ -135,6 +134,8 @@ class PygameExperiment:
         
         pygame.display.flip() 
         
+        # Zrzut bodźca zapisujemy przed startem rejestracji - jest tłem wykresu
+        # ścieżki wzroku i zapisem rzeczywistej rozdzielczości prezentacji.
         screenshot_path = os.path.join(self.participant_folder, "zrzut_ekranu_bodzca.png")
         pygame.image.save(self.screen, screenshot_path)
         
@@ -175,11 +176,10 @@ class PygameExperiment:
         
         end_time = pygame.time.get_ticks()
         reaction_time = (end_time - start_time) / 1000.0
-        is_correct = (user_answer == 'A')
+        is_correct = (user_answer == 'A')  # poprawna odpowiedź na pytanie z pliku
         
         self.tracker.log_event(f"ANSWER_SELECTED: {user_answer}, Correct: {is_correct}, RT: {reaction_time}")
         
-        # Feedback
         feedback_text = "Dobrze!" if is_correct else "Spróbujmy następnym razem!"
         feedback_color = (0, 200, 0) if is_correct else (200, 0, 0) 
         
@@ -213,6 +213,8 @@ class PygameExperiment:
         pygame.mouse.set_visible(False)
         self.tracker.log_event("TARGET_GAME_START")
         
+        # Cel pojawia się w jednym z pięciu miejsc, nigdy dwa razy pod rząd w tym
+        # samym - chodzi o wymuszenie sakady o znanej amplitudzie.
         margin = 0.15
         positions = {
             'top-left': (int(cfg.SCREEN_WIDTH * margin), int(cfg.SCREEN_HEIGHT * margin)),
@@ -260,11 +262,15 @@ class PygameExperiment:
                 gaze_data = self.tracker.get_latest_gaze_data()
                 gaze_x_norm, gaze_y_norm, is_gaze_valid = gaze_data['x'], gaze_data['y'], gaze_data['valid']
                 
+                # Filtr 1 Euro potrafi wyjść poza zakres 0-1, a kursor ma zostać
+                # na ekranie.
                 gaze_x_clamped = max(0.0, min(1.0, gaze_x_norm))
                 gaze_y_clamped = max(0.0, min(1.0, gaze_y_norm))
                 gaze_pos_screen = (int(gaze_x_clamped * cfg.SCREEN_WIDTH), int(gaze_y_clamped * cfg.SCREEN_HEIGHT))
                 
                 is_damaging = False
+                # Pasek rośnie tylko wtedy, gdy wzrok naprawdę jest na celu -
+                # próbki z POGV=0 się nie liczą.
                 if target_rect.collidepoint(gaze_pos_screen) and is_gaze_valid:
                     healing_this_frame = damage_per_second * delta_time_s
                     current_stability += healing_this_frame
@@ -287,6 +293,7 @@ class PygameExperiment:
 
                 base_radius = 15
                 cursor_radius = base_radius
+                # Pulsowanie kursora to informacja zwrotna, że cel jest trafiany.
                 if is_damaging:
                     pulse_speed = 8; pulse_amplitude = 4
                     pulse = math.sin(pygame.time.get_ticks() / 1000 * pulse_speed) * pulse_amplitude
