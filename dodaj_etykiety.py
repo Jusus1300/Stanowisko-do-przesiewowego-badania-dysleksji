@@ -15,10 +15,10 @@ import pandas as pd
 
 
 def wczytaj_etykiety(sciezka_etykiet):
-    """Zwraca słownik {subject_id: 0/1} na podstawie pliku z etykietami."""
+    # Zwraca mapę {subject_id: 0/1}. Preferujemy class_id, a gdy go brak -
+    # tekstową kolumnę label.
     df = pd.read_csv(sciezka_etykiet)
 
-    # Etykieta binarna: preferujemy class_id, w razie jego braku tekstową kolumnę label.
     if 'class_id' in df.columns:
         etykiety = pd.to_numeric(df['class_id'], errors='coerce')
     else:
@@ -28,7 +28,7 @@ def wczytaj_etykiety(sciezka_etykiet):
 
 
 def wyciagnij_id(filename):
-    """Wyciąga numer uczestnika z nazwy pliku, np. 'Subject_1003_T4_...' -> 1003."""
+    # 'Subject_1003_T4_..._raw.csv' -> 1003
     dopasowanie = re.search(r'(\d+)', str(filename))
     return int(dopasowanie.group(1)) if dopasowanie else None
 
@@ -43,12 +43,15 @@ def dodaj_etykiety(sciezka_wynikow, sciezka_etykiet, sciezka_wyjsciowa=None):
     ids = df['filename'].apply(wyciagnij_id)
     df['is_dyslexic'] = ids.map(mapa).astype('Int64')
 
+    # Brak etykiety nie przerywa zapisu, ale musi być widoczny - te wiersze
+    # odpadną potem w model_trainer.py.
     brakujace = df.loc[df['is_dyslexic'].isna(), 'filename'].tolist()
     if brakujace:
         print(f"UWAGA: brak etykiety dla {len(brakujace)} uczestników:")
         for nazwa in brakujace:
             print(f"  - {nazwa}")
 
+    # Bez podanej ścieżki nadpisujemy plik wejściowy.
     if sciezka_wyjsciowa is None:
         sciezka_wyjsciowa = sciezka_wynikow
 
@@ -64,7 +67,7 @@ def dodaj_etykiety(sciezka_wynikow, sciezka_etykiet, sciezka_wyjsciowa=None):
 
 def main():
     if len(sys.argv) < 3:
-        print(__doc__)
+        print(__doc__)  # docstring modułu służy tu za instrukcję użycia
         sys.exit(1)
 
     sciezka_wynikow = sys.argv[1]

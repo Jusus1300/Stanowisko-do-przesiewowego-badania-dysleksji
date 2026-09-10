@@ -2,5 +2,5 @@
 __pycache__/
 *.py[cod]
 
-# Wyniki analizy generowane lokalnie
+# Wykresy ścieżki wzroku z analizy grupowej
 *_scanpath.png

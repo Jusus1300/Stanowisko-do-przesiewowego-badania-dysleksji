@@ -1,49 +1,31 @@
-# Konfiguracja stanowiska badawczego.
-#
-# Plik zbiera w jednym miejscu wszystko, co opisuje warunki nagrania: stałe
-# eksperymentu (ścieżki, wygląd bodźca, ustawienia okulografu) oraz geometrię
-# ekranu, w której nagranie powstaje - klasę ScreenGeometry i funkcje
-# zapisujące, odczytujące i wykrywające te parametry (sekcja GEOMETRIA EKRANU
-# NAGRANIA na końcu pliku). Geometria trzyma się tutaj, bo wynika wprost
-# z SCREEN_WIDTH/SCREEN_HEIGHT i z fizycznych parametrów stanowiska poniżej.
-#
-# Poza dataclass i stdlib plik nie ma zależności - importuje go zarówno
-# eksperyment, jak i analiza. Cięższe biblioteki (screeninfo, PIL) są
-# wczytywane leniwie, wewnątrz funkcji, które ich potrzebują.
+# Konfiguracja stanowiska badawczego - stałe eksperymentu i geometria ekranu,
+# na którym powstaje nagranie. Importowana i przez eksperyment, i przez analizę,
+# więc poza stdlib nie ma zależności (screeninfo i PIL wczytywane są leniwie).
 
 import json
 import math
 import os
 from dataclasses import dataclass, asdict
 
-# Ustawienia Główne
+# --- Ścieżki ---
 DATA_FOLDER = "dane_z_badan"
 
-# Ścieżki do Plików Graficznych
 BACKGROUND_IMG = "dane_do_eksperymentu/grafiki/tlo_kokpit.jpg"
 TARGET_IMG = "dane_do_eksperymentu/grafiki/bot.png"
 
-# Ustawienia Ekranu i Grafiki
+# --- Ekran ---
 SCREEN_WIDTH, SCREEN_HEIGHT = 1920, 1080
 DEFAULT_MONITOR_INDEX = 0 
 
-# Fizyczne parametry stanowiska. Razem z rozdzielczością powyżej opisują
-# geometrię, w której powstaje nagranie, i są używane przez analizę do
-# przeliczenia pikseli na stopnie kąta widzenia (patrz sekcja GEOMETRIA
-# EKRANU NAGRANIA na końcu tego pliku).
-# Obie wartości trzeba ZMIERZYĆ dla konkretnego stanowiska - są to jedyne
-# parametry potoku, których nie da się odczytać z danych ani z systemu, a
-# błąd w nich przesuwa wszystkie cechy sakadowe względem tablicy STATS modelu
-# (np. 10% za mała szerokość ekranu zaniża sac_prog_dist_avg o ~10%).
-#
-# SCREEN_WIDTH_CM: szerokość aktywnej powierzchni matrycy (nie przekątna
-#   i nie szerokość obudowy). Wartość domyślna odpowiada typowemu monitorowi
-#   23,8" w formacie 16:9.
-# VIEWING_DISTANCE_CM: odległość oczu badanego od ekranu; dla Gazepoint GP3
-#   zalecany zakres to 60-70 cm.
+# Obie wartości trzeba ZMIERZYĆ dla konkretnego stanowiska - jako jedyne w potoku
+# nie dają się odczytać z danych ani z systemu, a błąd w nich przesuwa wszystkie
+# cechy sakadowe w DVA względem tablicy STATS modelu.
+# SCREEN_WIDTH_CM: szerokość aktywnej powierzchni matrycy (nie przekątna).
+# VIEWING_DISTANCE_CM: odległość oczu od ekranu, dla GP3 zalecane 60-70 cm.
 SCREEN_WIDTH_CM = 52.7
 VIEWING_DISTANCE_CM = 65.0
 
+# --- Wygląd bodźca tekstowego ---
 BACKGROUND_COLOR = (40, 40, 40)
 TEXT_COLOR = (255, 255, 255)
 FONT_SIZE_PYGAME = 48
@@ -52,13 +34,13 @@ LINE_SPACING_MULTIPLIER = 1.8
 VERTICAL_MARGIN_PERCENT = 0.1
 HORIZONTAL_MARGIN_PERCENT = 0.15
 
-# Ustawienia Eksperymentu
+# --- Treści prezentowane uczestnikowi ---
 TEXT_FILE = "dane_do_eksperymentu/tekst_badawczy.txt"
 TEXT_FILE_QUESTION = "dane_do_eksperymentu/pytanie_badawcze.txt"
 TEXT_FILE_INSTRUCTION = "dane_do_eksperymentu/instrukcja_do_gry.txt"
 BEHAVIORAL_RESULTS_FILENAME = "wyniki_behawioralne.csv"
 
-# Ustawienia Zadania Kontrolnego (Gra z Dronem)
+# --- Zadanie kontrolne (gra z dronem): sakady do celu w losowych rogach ---
 TARGET_WIDTH = 300
 TARGET_HEIGHT = 300
 TARGET_MAX_HEALTH = 100
@@ -70,65 +52,39 @@ HEALTH_BAR_COLOR_EMPTY = (150, 0, 0)
 SACCADE_TARGET_DURATION = 4000
 SACCADE_TRIALS = 10
 
-# Ustawienia Eyetrackera (dla eksperymentu)
+# --- Eyetracker ---
 GAZEPOINT_HOST = '127.0.0.1'
 GAZEPOINT_PORT = 4242
 ONE_EURO_MIN_CUTOFF = 0.04
 ONE_EURO_BETA = 0.9
 EYETRACKER_FREQ = 150
 
-# Margines siatki kalibracyjnej we współrzędnych znormalizowanych: punkty
-# skrajne trafiają na 0.1 i 0.9 szerokości/wysokości ekranu, środkowe na 0.5.
-# Z tego powstaje siatka 3x3, czyli kalibracja 9-punktowa.
+# Margines siatki kalibracyjnej: punkty skrajne na 0.1 i 0.9 ekranu, środkowe
+# na 0.5 - razem siatka 3x3, czyli kalibracja 9-punktowa.
 CALIBRATION_MARGIN = 0.1
-
 
 
 # === GEOMETRIA EKRANU NAGRANIA ===
 #
-# Potok analizy przetwarza dane z dwóch źródeł o różnej geometrii:
-#
-#   * zbiór ETDD70 (analiza grupowa) - ekran 1680x1050, współrzędne zapisane
-#     już w pikselach tamtego ekranu,
-#   * własne stanowisko (analiza indywidualna) - ekran opisany stałymi z góry
-#     tego pliku, współrzędne z GP3 znormalizowane do zakresu 0-1.
-#
-# Geometria nie może być więc globalną stałą modułu analizy: decyduje o niej
-# nagranie, a nie plik z kodem. Wchodzi ona do wyniku dwa razy i za każdym
-# razem zmienia liczby, które trafiają do modelu:
-#
-#   1. przeliczenie pikseli na stopnie kąta widzenia (px_to_dva) - zależy od
-#      szerokości ekranu w pikselach i centymetrach oraz od odległości oczu
-#      od ekranu; cechy sakadowe modelu (sac_prog_dist_avg, sac_prog_y_stab)
-#      są wyrażone właśnie w DVA,
-#   2. parametry xres/yres podawane do I2MC - z nich algorytm liczy m.in.
-#      próg interpolacji luk (maxdisp) i skalę grupowania.
-#
-# Podstawienie geometrii ETDD70 pod nagranie z własnego stanowiska (1920x1080)
-# dawało 14% błędu skali na osi X i inną skalę na osi Y, czyli systematyczne
-# przesunięcie wszystkich cech sakadowych względem tablicy STATS modelu.
+# Geometria nie może być stałą modułu analizy, bo potok obsługuje dwa źródła
+# o różnych ekranach: zbiór ETDD70 (1680x1050, współrzędne w pikselach tamtego
+# ekranu) i własne stanowisko (piksele z góry tego pliku, współrzędne z GP3
+# znormalizowane 0-1). Wchodzi do wyniku dwa razy: przez px_to_dva (cechy
+# sakadowe modelu są w DVA) i przez xres/yres podawane do I2MC.
 
-# Nazwa pliku z parametrami ekranu, zapisywanego w folderze uczestnika przez
-# experiment_main.py. Dzięki niemu nagranie opisuje samo siebie i analiza nie
-# musi zakładać, że konfiguracja stanowiska nie zmieniła się od czasu badania.
+# Plik z geometrią zapisywany w folderze uczestnika - dzięki niemu nagranie
+# opisuje samo siebie i analiza nie zależy od bieżącej treści tego pliku.
 GEOMETRY_FILENAME = "parametry_ekranu.json"
 
-# Zrzut ekranu bodźca zapisywany przez experiment_module.run_reading_screen.
-# Dla starszych nagrań, sprzed wprowadzenia GEOMETRY_FILENAME, jest to jedyny
+# Zrzut bodźca z experiment_module - dla nagrań sprzed GEOMETRY_FILENAME jedyny
 # ślad rzeczywistej rozdzielczości prezentacji.
 STIMULUS_SCREENSHOT = "zrzut_ekranu_bodzca.png"
 
 
 @dataclass(frozen=True)
 class ScreenGeometry:
-
-    # Komplet parametrów potrzebnych do przeliczenia współrzędnych wzroku na
-    # stopnie kąta widzenia i do skonfigurowania I2MC.
-    #
-    # width_cm to szerokość *aktywnej powierzchni* matrycy (nie przekątna
-    # i nie szerokość obudowy), viewing_distance_cm - odległość oczu badanego
-    # od ekranu.
-
+    # Komplet parametrów potrzebnych do przeliczenia wzroku na stopnie kąta
+    # widzenia i do skonfigurowania I2MC. Pole 'source' trafia do raportu.
     width_px: int
     height_px: int
     width_cm: float
@@ -140,7 +96,7 @@ class ScreenGeometry:
         return self.width_cm / self.width_px
 
     def px_to_dva(self, px_distance):
-        # Konwertuje dystans w pikselach na stopnie kąta widzenia (DVA).
+        # Piksele -> stopnie kąta widzenia, przez trójkąt oko-ekran.
         dist_cm = px_distance * self.cm_per_px
         return 2 * math.degrees(math.atan(dist_cm / (2 * self.viewing_distance_cm)))
 
@@ -150,10 +106,8 @@ class ScreenGeometry:
                 f"(źródło: {self.source})")
 
 
-# Ekran użyty przy nagrywaniu zbioru ETDD70 - obowiązuje w analizie grupowej,
-# bo pliki Subject_*_raw.csv zawierają współrzędne w pikselach tamtego ekranu.
-# Parametry fizyczne są estymowane z rozdzielczości (1680x1050 to matryca 22"
-# w formacie 16:10).
+# Ekran użyty przy nagrywaniu ETDD70 - obowiązuje w analizie grupowej.
+# Wymiary fizyczne są estymowane z rozdzielczości (1680x1050 to matryca 22" 16:10).
 ETDD70_SCREEN = ScreenGeometry(
     width_px=1680,
     height_px=1050,
@@ -164,9 +118,8 @@ ETDD70_SCREEN = ScreenGeometry(
 
 
 def _physical_params():
-    # Fizyczne parametry stanowiska z góry tego pliku, z walidacją: błędnie
-    # ustawiona szerokość lub odległość przelicza się wprost na przesunięcie
-    # wszystkich cech w DVA, więc lepiej przerwać niż liczyć po cichu.
+    # Walidacja jest tu celowo twarda: zerowa lub ujemna wartość dałaby wynik
+    # policzony po cichu z bezsensownej skali.
     width_cm = float(SCREEN_WIDTH_CM)
     distance_cm = float(VIEWING_DISTANCE_CM)
 
@@ -180,12 +133,8 @@ def _physical_params():
 
 
 def screen_from_config(width_px=None, height_px=None, source=None):
-
-    # Geometria stanowiska wynikająca z ustawień w tym pliku. Rozdzielczość
-    # można nadpisać (np. rzeczywistą rozdzielczością monitora odczytaną z
-    # systemu), parametry fizyczne pochodzą zawsze z konfiguracji - nie da się
-    # ich zmierzyć programowo.
-
+    # Rozdzielczość można nadpisać (np. odczytaną z systemu), parametry fizyczne
+    # pochodzą zawsze z konfiguracji - nie da się ich zmierzyć programowo.
     width_cm, distance_cm = _physical_params()
     return ScreenGeometry(
         width_px=int(width_px if width_px else SCREEN_WIDTH),
@@ -197,15 +146,9 @@ def screen_from_config(width_px=None, height_px=None, source=None):
 
 
 def detect_station_screen(monitor_index=0):
-
-    # Geometria stanowiska w chwili nagrania. Rozdzielczość bierzemy z systemu
-    # (screeninfo), bo to ona - a nie wpis w konfiguracji - decyduje, do czego
-    # GP3 normalizuje współrzędne POG: okulograf kalibruje się do całej
-    # powierzchni monitora. Rozjazd między monitorem a konfiguracją oznacza
-    # dodatkowo źle rozłożony bodziec, więc jest zgłaszany.
-    #
+    # Geometria stanowiska w chwili nagrania. Rozdzielczość bierzemy z systemu,
+    # bo to do niej - a nie do wpisu w konfiguracji - GP3 normalizuje POG.
     # Zwraca parę (geometria, szerokość z EDID lub None).
-
     width_px = height_px = None
     source = "experiment_config.py (nie odczytano parametrów monitora)"
     edid_width_cm = None
@@ -238,9 +181,8 @@ def detect_station_screen(monitor_index=0):
 
     screen = screen_from_config(width_px, height_px, source=source)
 
-    # Szerokość z EDID bywa zaokrąglona albo pusta, więc nie zastępuje nią
-    # wartości z konfiguracji - służy wyłącznie do wychwycenia sytuacji, w
-    # której operator zmienił monitor i zapomniał poprawić SCREEN_WIDTH_CM.
+    # Szerokość z EDID bywa zaokrąglona albo pusta, więc nie zastępuje wartości
+    # z konfiguracji - służy tylko do wychwycenia zmiany monitora.
     if edid_width_cm and edid_width_cm > 10.0:
         relative_diff = abs(edid_width_cm - screen.width_cm) / edid_width_cm
         if relative_diff > 0.05:
@@ -254,11 +196,7 @@ def detect_station_screen(monitor_index=0):
 
 
 def save_screen_geometry(screen, folder, edid_width_cm=None):
-
-    # Zapisuje geometrię obok surowych danych uczestnika, żeby analiza mogła
-    # odtworzyć warunki nagrania niezależnie od bieżącej zawartości
-    # experiment_config.py.
-
+    # Geometria ląduje obok surowych danych uczestnika.
     payload = asdict(screen)
     if edid_width_cm:
         payload["width_cm_edid"] = round(edid_width_cm, 1)
@@ -270,12 +208,8 @@ def save_screen_geometry(screen, folder, edid_width_cm=None):
 
 
 def load_screen_geometry(folder):
-
-    # Odczytuje geometrię zapisaną przy nagraniu. Zwraca None, gdy pliku nie
-    # ma (nagranie sprzed wprowadzenia GEOMETRY_FILENAME) albo gdy jest
-    # niekompletny - w obu przypadkach lepszy jest jawny fallback niż
-    # połowiczne dane.
-
+    # None oznacza "brak wiarygodnego zapisu" - i przy braku pliku, i przy pliku
+    # niekompletnym. Jawny fallback jest lepszy niż połowiczne parametry.
     path = os.path.join(folder, GEOMETRY_FILENAME)
     if not os.path.exists(path):
         return None
@@ -299,8 +233,7 @@ def load_screen_geometry(folder):
 
 
 def _stimulus_resolution(folder):
-    # Rozdzielczość zrzutu ekranu bodźca - odpowiada powierzchni prezentacji
-    # w chwili nagrania.
+    # Rozdzielczość zrzutu bodźca = powierzchnia prezentacji w chwili nagrania.
     path = os.path.join(folder, STIMULUS_SCREENSHOT)
     if not os.path.exists(path):
         return None
@@ -314,13 +247,8 @@ def _stimulus_resolution(folder):
 
 
 def screen_for_recording(folder):
-
-    # Geometria, której ma użyć analiza indywidualna dla nagrania z podanego
-    # folderu. Kolejność źródeł: plik zapisany przy nagraniu, potem stałe
-    # z tego pliku, przy czym rozdzielczość jest jeszcze konfrontowana ze
-    # zrzutem ekranu bodźca - dla starszych nagrań to jedyny zapis tego, na
-    # jakim ekranie faktycznie prezentowano tekst.
-
+    # Geometria dla analizy indywidualnej. Kolejno: plik zapisany przy nagraniu,
+    # potem konfiguracja - z rozdzielczością skonfrontowaną ze zrzutem bodźca.
     screen = load_screen_geometry(folder)
     if screen is not None:
         return screen

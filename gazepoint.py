@@ -1,3 +1,6 @@
+# Klient Open Gaze API (Gazepoint GP3): kalibracja, zapis surowych próbek do CSV
+# i wygładzony podgląd wzroku na żywo dla zadania z celem.
+
 import socket
 import xml.etree.ElementTree as ET
 import csv
@@ -13,31 +16,29 @@ class GazeTracker:
         self.port = port
         self.sock = None
         
-        # Pliki
+        # Pliki wyjściowe
         self.csv_writer = None
         self.csv_file = None
         self.event_log_file = None
         self.event_writer = None
         
-        # Flagi stanu
+        # Stan wątku rejestrującego
         self.is_logging = False
         self.logging_thread = None
         
-        # Dane Live Preview
+        # Ostatnia próbka dla podglądu na żywo - czytana z wątku pygame
         self.latest_gaze_data = {'x': 0.5, 'y': 0.5, 'valid': False}
         self.gaze_data_lock = threading.Lock()
         
-        # Synchronizacja Czasu
+        # Punkt zaczepienia zegara okulografu do zegara PC
         self.time_anchor = None 
 
-        # Odbior odpowiedzi na komendy sterujace. _rx_buffer przechowuje
-        # nadmiarowe dane doczytane z gniazda przy oczekiwaniu na ACK,
-        # a _ack_supported zapamietuje, czy ta wersja Gazepoint Control
-        # w ogole potwierdza polecenia (None = jeszcze nie wiadomo).
+        # Odbiór potwierdzeń komend. W _rx_buffer zostaje to, co doczytaliśmy
+        # z gniazda czekając na ACK; _ack_supported = None znaczy "jeszcze nie
+        # wiadomo, czy ta wersja Gazepoint Control w ogóle potwierdza polecenia".
         self._rx_buffer = ""
         self._ack_supported = None
 
-        # Filtrowanie
         filter_config = {
             'freq': 150,
             'mincutoff': experiment_config.ONE_EURO_MIN_CUTOFF,
@@ -47,27 +48,22 @@ class GazeTracker:
         self.x_filter = OneEuroFilter(**filter_config)
         self.y_filter = OneEuroFilter(**filter_config)
 
-        # Komendy konfiguracyjne.
+        # Konfiguracja startowa okulografu.
         self.init_commands = [
             '<SET ID="ENABLE_SEND_TIME" STATE="1" />',
             '<SET ID="ENABLE_SEND_TIME_TICK" STATE="1" />',
-            # Punkt spojrzenia osobno dla każdego oka. Bez tych dwóch komend
-            # GP3 wysyła wyłącznie BPOG, czyli punkt już uśredniony przez
-            # okulograf - a wtedy I2MC nie ma dwóch niezależnych sygnałów do
-            # grupowania i deklarowana odporność algorytmu na szum nie jest
-            # osiągana (patrz analiza_obuoczna_i2mc.md).
+            # Punkt spojrzenia osobno dla każdego oka - bez tego GP3 wysyła tylko
+            # BPOG (już uśredniony) i I2MC nie ma dwóch sygnałów do grupowania.
             '<SET ID="ENABLE_SEND_POG_LEFT" STATE="1" />',
             '<SET ID="ENABLE_SEND_POG_RIGHT" STATE="1" />',
-            # BPOG zostaje: służy do podglądu na żywo i jako zapas dla nagrań,
-            # w których któreś z oczu nie było widoczne.
+            # BPOG zostaje: podgląd na żywo i zapas, gdy któreś oko przepadnie.
             '<SET ID="ENABLE_SEND_POG_BEST" STATE="1" />',
-            # Ważne: Domyślnie WYŁĄCZAM wysyłanie danych, żeby nie zapychać bufora
+            # Przesył domyślnie wyłączony, żeby nie zapychać bufora przed startem.
             '<SET ID="ENABLE_SEND_DATA" STATE="0" />'
         ]
 
-        # Definicja kolumn CSV. LPOG*/RPOG* to punkt spojrzenia oka lewego
-        # i prawego, LPOGV/RPOGV - flagi poprawności każdego z nich (potok
-        # analizy odrzuca próbkę na jednym oku nie unieważniając drugiego).
+        # Kolumny nagrania: LPOG*/RPOG* to oko lewe i prawe, *POGV - flagi
+        # poprawności każdego z sygnałów osobno.
         self.csv_fields = [
             'PC_TIME',
             'TIME',
@@ -87,14 +83,10 @@ class GazeTracker:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((self.host, self.port))
-            self.sock.settimeout(2) # Timeout dla operacji blokujących
+            self.sock.settimeout(2)  # timeout operacji blokujących
             
-            # Wysyłam konfigurację wstępną i sprawdzam, czy została przyjęta -
-            # odrzucone ENABLE_SEND_POG_BEST oznaczałoby puste kolumny BPOGX/BPOGY
-            # w nagraniu, co bez tej kontroli wyszłoby dopiero na etapie analizy.
-            # Tak samo odrzucone ENABLE_SEND_POG_LEFT/RIGHT dałoby puste kolumny
-            # LPOG*/RPOG*, a potok analizy zszedłby po cichu do trybu jednoocznego
-            # na BPOG - stąd komunikat o błędzie już na etapie łączenia.
+            # Sprawdzamy, czy ustawienia zostały przyjęte - odrzucone POG_LEFT/RIGHT
+            # dałoby puste kolumny w nagraniu i wyszłoby dopiero przy analizie.
             for cmd in self.init_commands:
                 if self._send_command(cmd, expect_id=self._command_id(cmd)) is False:
                     print(f"[BLAD] Gazepoint odrzucil komende startowa: {cmd}")
@@ -106,7 +98,7 @@ class GazeTracker:
 
     @staticmethod
     def _command_id(command):
-        # Wyciaga wartosc atrybutu ID z komendy, zeby dopasowac do niej ACK.
+        # Atrybut ID komendy - po nim dopasowujemy ACK.
         try:
             return ET.fromstring(command).get('ID')
         except ET.ParseError:
@@ -114,8 +106,8 @@ class GazeTracker:
 
     @staticmethod
     def _ack_verdict(line, expect_id):
-        # True dla ACK, False dla NACK, None gdy linia dotyczy czegos innego
-        # (np. rekordu danych, ktory zalega w buforze).
+        # True = ACK, False = NACK, None = linia dotyczy czegoś innego (np. rekordu
+        # danych zalegającego w buforze).
         line = line.strip()
         if not (line.startswith('<ACK') or line.startswith('<NACK')):
             return None
@@ -128,8 +120,8 @@ class GazeTracker:
         return root.tag == 'ACK'
 
     def _await_ack(self, expect_id, timeout):
-        # Czyta z gniazda az do ACK/NACK o pasujacym ID albo do uplywu czasu.
-        # Nadmiarowe linie zostaja w _rx_buffer, zeby nic nie zginelo.
+        # Czyta do skutku albo do upływu czasu. Nadmiarowe linie zostają
+        # w _rx_buffer, żeby nic nie zginęło.
         deadline = time.monotonic() + timeout
         while True:
             while '\r\n' in self._rx_buffer:
@@ -156,10 +148,8 @@ class GazeTracker:
             self._rx_buffer += chunk.decode('utf-8', errors='ignore')
 
     def _send_command(self, command, expect_id=None, timeout=1.0):
-        # Zwraca True (ACK), False (NACK) albo None, gdy potwierdzenia nie
-        # sprawdzano lub serwer nie odpowiedzial. Nigdy nie rzuca wyjatkiem -
-        # brak potwierdzenia degraduje sie do dawnego zachowania "wyslij i idz
-        # dalej", ale zostaje odnotowany w konsoli.
+        # Nigdy nie rzuca wyjątkiem: brak potwierdzenia degraduje się do dawnego
+        # "wyślij i idź dalej", ale zostaje odnotowany w konsoli.
         if not self.sock:
             return None
         try:
@@ -174,9 +164,8 @@ class GazeTracker:
         verdict = self._await_ack(expect_id, timeout)
         if verdict is None:
             if self._ack_supported is None:
-                # Pierwsza komenda bez odpowiedzi: przyjmuje, ze ta wersja
-                # Gazepoint Control nie potwierdza polecen, i przestaje na nie
-                # czekac, zeby nie mnozyc timeoutow przy kazdej kolejnej.
+                # Pierwsza komenda bez odpowiedzi - ta wersja Gazepointa nie
+                # potwierdza poleceń, więc przestajemy czekać przy kolejnych.
                 self._ack_supported = False
                 print("[WARN] Gazepoint Control nie odpowiada na komendy SET - "
                       "poprawnosc ustawien nie bedzie weryfikowana.")
@@ -185,41 +174,36 @@ class GazeTracker:
         return verdict
 
     def _flush_socket(self):
-        # Opróżnia bufor gniazda ze starych danych (np. z kalibracji).
-        # Używa trybu nieblokującego, aby wczytać wszystko co zalega, aż do pustego bufora.
+        # Wyrzuca z bufora dane zalegające np. po kalibracji. Tryb nieblokujący,
+        # czytamy aż do pustego bufora.
         if not self.sock: return
 
         self._rx_buffer = ""
 
         try:
-            self.sock.setblocking(False) # Tryb nieblokujący
+            self.sock.setblocking(False)
             while True:
                 data = self.sock.recv(4096)
                 if not data: break
         except BlockingIOError:
-            # To jest oczekiwane - oznacza, że bufor jest pusty
-            pass
+            pass  # oczekiwane: bufor pusty
         except OSError:
             pass
         finally:
-            self.sock.setblocking(True) # Przywracam tryb blokujący
+            self.sock.setblocking(True)
 
     def calibration_grid(self):
-        # Siatka 3x3 (9 punktów) we współrzędnych znormalizowanych, budowana
-        # z marginesu w experiment_config. Kolejność wierszami, od lewej
-        # górnej do prawej dolnej - Gazepoint kalibruje w kolejności dodania.
+        # Siatka 3x3 we współrzędnych znormalizowanych, wierszami od lewego górnego
+        # rogu - Gazepoint kalibruje w kolejności dodawania punktów.
         m = experiment_config.CALIBRATION_MARGIN
         coords = (m, 0.5, 1.0 - m)
         return [(x, y) for y in coords for x in coords]
 
     def calibrate(self):
         # Open Gaze API nie ma komendy ustawiającej "typ" kalibracji - liczbę
-        # i rozmieszczenie punktów definiuje się czyszcząc listę punktów
-        # (CALIBRATE_CLEAR), a następnie dodając je pojedynczo
-        # (CALIBRATE_ADDPOINT). Wcześniejsze CALIBRATE_TYPE nie istnieje
-        # w protokole: serwer odrzucał je, a ponieważ kod nie czytał
-        # odpowiedzi, w praktyce działała domyślna kalibracja z Gazepoint
-        # Control, nie 9-punktowa.
+        # punktów definiuje się przez CALIBRATE_CLEAR i kolejne CALIBRATE_ADDPOINT.
+        # Wcześniejsze CALIBRATE_TYPE nie istnieje w protokole: serwer je odrzucał,
+        # a kod nie czytał odpowiedzi, więc działała kalibracja domyślna.
         points = self.calibration_grid()
         print(f"[INFO] Konfiguracja kalibracji {len(points)}-punktowej...")
 
@@ -256,10 +240,8 @@ class GazeTracker:
         print("[INFO] Oczekiwanie na zakończenie kalibracji przez Gazepoint...")
 
     def start_logging(self, data_filename, event_filename, save_events):
-        # 1. Najpierw wyrzucam śmieci z bufora
-        self._flush_socket()
+        self._flush_socket()  # najpierw śmieci z poprzedniego etapu
         
-        # 2. Otwieram pliki
         self.csv_file = open(data_filename, 'w', newline='', encoding='utf-8')
         self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=self.csv_fields)
         self.csv_writer.writeheader()
@@ -272,10 +254,9 @@ class GazeTracker:
         self.time_anchor = None
         self.is_logging = True
         
-        # 3. Włączam przesył danych w Gazepoint
+        # Przesył włączamy dopiero z gotowym plikiem, wątek odbiera go w tle.
         self._send_command('<SET ID="ENABLE_SEND_DATA" STATE="1" />')
         
-        # 4. Uruchamiam wątek odbierający
         self.logging_thread = threading.Thread(target=self._logging_loop, daemon=True)
         self.logging_thread.start()
 
@@ -286,10 +267,10 @@ class GazeTracker:
             self.event_log_file.flush() 
 
     def stop_logging(self):
-        # 1. Najpierw zatrzymuję pętlę w Pythonie
+        # Kolejność ma znaczenie: najpierw pętla w Pythonie, potem cisza po stronie
+        # okulografu, na końcu zamknięcie plików.
         self.is_logging = False
         
-        # 2. Wysyłam komendę STOP do Gazepoint, żeby przestał wysyłać dane do bufora
         self._send_command('<SET ID="ENABLE_SEND_DATA" STATE="0" />')
         
         if self.logging_thread and self.logging_thread.is_alive():
@@ -309,12 +290,11 @@ class GazeTracker:
             
             root = ET.fromstring(xml_str)
             if root.tag == 'REC':
-                
                 tracker_time_str = root.get('TIME')
                 if tracker_time_str is None: return
                 tracker_time = float(tracker_time_str)
 
-                # Logika synchronizacji czasu
+                # Czas okulografu przeliczamy na czas PC względem pierwszej próbki.
                 if self.time_anchor is None:
                     self.time_anchor = (recv_timestamp, tracker_time)
                 
@@ -332,7 +312,8 @@ class GazeTracker:
                     
                     self.csv_writer.writerow(data_dict)
 
-                # Live Preview
+                # Podgląd na żywo idzie z BPOG i przez filtr 1 Euro - surowy punkt
+                # zbyt drga, żeby dało się nim celować.
                 bpog_x_str = root.get('BPOGX')
                 bpog_y_str = root.get('BPOGY')
                 
@@ -353,13 +334,15 @@ class GazeTracker:
                         self.latest_gaze_data['valid'] = False
                         
         except (ET.ParseError, ValueError, TypeError, AttributeError):
-            pass
+            pass  # uszkodzony rekord pomijamy, nagranie leci dalej
 
     def get_latest_gaze_data(self):
         with self.gaze_data_lock:
             return self.latest_gaze_data.copy()
 
     def _logging_loop(self):
+        # Wątek odbiorczy: strumień TCP trzeba pociąć po \r\n, bo pakiety nie
+        # pokrywają się z rekordami.
         if not self.sock: return
         buffer = ""
         while self.is_logging:

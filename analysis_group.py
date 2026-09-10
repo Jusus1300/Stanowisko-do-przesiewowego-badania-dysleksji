@@ -1,3 +1,6 @@
+# Analiza grupowa: ten sam potok co indywidualna, ale na całym katalogu plików
+# Subject_*_raw.csv ze zbioru ETDD70, liczonych równolegle.
+
 import pandas as pd
 import numpy as np
 import os
@@ -5,24 +8,22 @@ import glob
 import analysis_core as core
 import experiment_config as cfg
 import matplotlib
-matplotlib.use('Agg') 
+matplotlib.use('Agg')  # backend bez GUI - wykresy powstają w procesach roboczych
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import concurrent.futures
 
 def process_single_subject(filepath, folder_path, generate_plots, screen):
-    """Funkcja pomocnicza przetwarzająca pojedynczego uczestnika (dla multiprocessing)"""
+    # Jeden uczestnik = jedno zadanie procesu roboczego. Zwraca wiersz wyników
+    # albo None, gdy pliku nie dało się przetworzyć.
     filename = os.path.basename(filepath)
     print(f"Przetwarzanie: {filename}...")
     
     try:
         df = pd.read_csv(filepath)
         
-        # Standaryzacja nazw kolumn i przygotowanie danych.
-        # Zbiór ETDD70 zawiera zapis obuoczny - do segmentacji trafiają oba
-        # sygnały, żeby I2MC mógł grupować każde oko niezależnie. Starsze
-        # pliki bez kolumn prawego oka nadal działają (potok schodzi wtedy
-        # do trybu jednoocznego).
+        # ETDD70 ma zapis obuoczny - oba sygnały idą do I2MC. Starsze pliki bez
+        # kolumn prawego oka nadal działają, tylko jednoocznie.
         clean_df = pd.DataFrame()
         clean_df['x'] = df['gaze_x_left']
         clean_df['y'] = df['gaze_y_left']
@@ -41,13 +42,8 @@ def process_single_subject(filepath, folder_path, generate_plots, screen):
                   f"częstotliwości {core.GROUP_EXPERIMENT_FREQ} Hz.")
             sample_rate_ms = 1000.0 / core.GROUP_EXPERIMENT_FREQ
 
-        # Brakujące/nieprawidłowe próbki oznaczamy jako NaN zamiast usuwać wiersze:
-        # usunięcie wiersza przesuwa oś czasu, więc I2MC nigdy nie zobaczyłby luki
-        # do interpolacji (patrz core.INTERP_MAX_GAP_MS).
-        #
-        # Filtr poprawności stosowany jest osobno do każdego oka: próbka
-        # odrzucona na jednym oku nie unieważnia drugiego, bo I2MC potrafi
-        # skorzystać z oka pozostałego (I2MC.average_eyes).
+        # Złe próbki jako NaN, nie usunięcie wiersza - inaczej przesuwa się oś
+        # czasu i I2MC nie widzi luki do interpolacji. Filtr osobno na każde oko.
         invalid_left = ~((clean_df['x'] > 1) & (clean_df['y'] > 1))
         clean_df.loc[invalid_left, ['x', 'y']] = np.nan
 
@@ -55,9 +51,7 @@ def process_single_subject(filepath, folder_path, generate_plots, screen):
             invalid_right = ~((clean_df['x_prawe'] > 1) & (clean_df['y_prawe'] > 1))
             clean_df.loc[invalid_right, ['x_prawe', 'y_prawe']] = np.nan
 
-        # Oko bez ani jednej poprawnej próbki wypada z analizy zamiast trafiać
-        # do I2MC jako kolumna samych NaN - grupowanie takiego kanału kończy
-        # się błędem i przewraca segmentację także dla oka sprawnego.
+        # Kolumna samych NaN wywraca grupowanie I2MC, więc martwe oko odpada.
         left_ok = clean_df['x'].notna().any()
         right_ok = has_right_eye and clean_df['x_prawe'].notna().any()
 
@@ -76,7 +70,7 @@ def process_single_subject(filepath, folder_path, generate_plots, screen):
             print(f"  -> {filename}: lewe oko bez poprawnych próbek, "
                   f"analiza jednooczna (prawe).")
 
-        # --- POTOK ANALIZY I2MC ---
+        # --- potok I2MC ---
         df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms, screen)
         
         events = core.classify_movements(df_segmented, sample_rate_ms)
@@ -86,7 +80,7 @@ def process_single_subject(filepath, folder_path, generate_plots, screen):
         if diagnosis['total_score'] is None:
             print(f"  -> Ostrzeżenie {filename}: {diagnosis.get('error', 'segmentacja nieudana')}")
 
-        # --- WIZUALIZACJA (OPCJONALNA) ---
+        # --- wizualizacja (opcjonalna) ---
         if generate_plots:
             try:
                 viz_out_path = os.path.splitext(filepath)[0] + "_scanpath.png"
@@ -124,13 +118,12 @@ def process_single_subject(filepath, folder_path, generate_plots, screen):
                 plt.title(f"Ścieżka wzroku podczas Zadania 1: Czytanie tekstu - {filename}")
                 plt.tight_layout()
                 plt.savefig(viz_out_path)
-                plt.close('all') # Zamknięcie figury uwalnia pamięć RAM
+                plt.close('all')  # bez tego pamięć rośnie z każdym plikiem
                 
             except Exception as viz_e:
                 print(f"  -> Błąd generowania wykresu dla {filename}: {viz_e}")
                 plt.close('all')
 
-        # Zbieranie wyników
         result_row = {
             'filename': filename,
             'score': diagnosis['total_score'],
@@ -144,13 +137,9 @@ def process_single_subject(filepath, folder_path, generate_plots, screen):
         return None
 
 def run_analysis(folder_path, generate_plots=True, screen=cfg.ETDD70_SCREEN):
-
-    # Analiza grupowa pracuje na plikach 'Subject_*_raw.csv' ze zbioru ETDD70,
-    # których współrzędne są zapisane w pikselach ekranu użytego przy jego
-    # nagrywaniu - stąd domyślna geometria ETDD70_SCREEN. Dane z innego
-    # stanowiska wymagają podania własnej geometrii, bo od niej zależy zarówno
-    # przeliczenie cech na stopnie kąta widzenia, jak i xres/yres dla I2MC.
-
+    # Domyślna geometria to ekran ETDD70, bo pliki Subject_*_raw.csv mają
+    # współrzędne w jego pikselach. Dane z innego stanowiska wymagają podania
+    # własnej geometrii - zależy od niej i przeliczenie na DVA, i xres/yres I2MC.
     print(f"Rozpoczynanie analizy grupowej (I2MC) w folderze: {folder_path}")
     print(f"Geometria ekranu: {screen.describe()}")
     
@@ -161,10 +150,9 @@ def run_analysis(folder_path, generate_plots=True, screen=cfg.ETDD70_SCREEN):
     
     results_list = []
     
-    # Wielowątkowość za pomocą ProcessPoolExecutor
     print(f"Uruchamianie przetwarzania wielowątkowego dla {len(files)} plików...")
+    # Procesy, nie wątki - segmentacja jest liczeniowa i GIL by ją zablokował.
     with concurrent.futures.ProcessPoolExecutor() as executor:
-        # Przekazywanie argumentów do funkcji process_single_subject
         futures = {executor.submit(process_single_subject, fp, folder_path, generate_plots, screen): fp for fp in files}
         
         for future in concurrent.futures.as_completed(futures):
@@ -175,7 +163,7 @@ def run_analysis(folder_path, generate_plots=True, screen=cfg.ETDD70_SCREEN):
     if not results_list:
         return "Brak poprawnie przetworzonych plików."
         
-    # Zapis wyników zbiorczych
+    # Zbiorczy CSV - wejście dla dodaj_etykiety.py i model_trainer.py.
     summary_df = pd.DataFrame(results_list)
     output_path = os.path.join(folder_path, "#wyniki_grupowe.csv")
     summary_df.to_csv(output_path, index=False)

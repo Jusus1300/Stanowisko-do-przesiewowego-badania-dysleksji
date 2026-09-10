@@ -1,3 +1,7 @@
+# Wspólny rdzeń obu analiz: segmentacja I2MC, cechy diagnostyczne i model ryzyka.
+# Moduł nie zna geometrii ekranu - dostaje ją (ScreenGeometry) w argumencie, bo
+# opisuje ona konkretne nagranie, a nie ten plik.
+
 import pandas as pd
 import numpy as np
 import I2MC
@@ -7,57 +11,27 @@ import warnings
 import json
 import os
 
-# Uwaga: ten moduł nie definiuje żadnej domyślnej geometrii ekranu. Parametry
-# ekranu (obiekt experiment_config.ScreenGeometry) opisują konkretne nagranie
-# i są przekazywane w argumencie - wcześniejsze stałe modułu opisywały ekran
-# zbioru ETDD70 i po cichu obowiązywały także dla nagrań z własnego
-# stanowiska o innej rozdzielczości i innych wymiarach fizycznych.
 
-# Domyślna (zapasowa) częstotliwość próbkowania eyetrackera w eksperymencie
-# grupowym. Używana wyłącznie jako fallback, gdy w pliku źródłowym brak
-# wiarygodnej kolumny czasu, z której można automatycznie wyznaczyć
-# rzeczywistą częstotliwość (patrz estimate_sample_rate_ms).
+# Zapasowa częstotliwość dla analizy grupowej - tylko gdy z pliku nie da się
+# wyznaczyć rzeczywistej (patrz estimate_sample_rate_ms).
 GROUP_EXPERIMENT_FREQ = 250
 
-# === PARAMETRY ALGORYTMU I2MC ===
+# Parametry I2MC. Minimalnego czasu fiksacji nie ustawiamy - zostaje domyślne
+# opt['minFixDur'] biblioteki (40 ms).
 INTERP_MAX_GAP_MS = 100
 WINDOW_SIZE_MS = 200
-# Minimalny czas trwania fiksacji nie jest tu ustawiany - obowiazuje
-# wbudowana wartosc domyslna I2MC (opt['minFixDur'], 40 ms).
 
-# Ziarno generatora liczb losowych używanego przez I2MC.
-#
-# Grupowanie 2-means w I2MC startuje z inicjalizacji kmeans++, która losuje
-# centroidy startowe (I2MC.kmeans2 woła np.random.randint i np.random.rand
-# bez ustawionego ziarna). Bez ustalonego ziarna ten sam plik daje przy każdym
-# uruchomieniu inny wynik: zaobserwowany rozstęp oceny ryzyka dla jednego
-# uczestnika sięgał 0,13, czyli więcej niż różnica między analizą jednooczną
-# a obuoczną. Wyników nie dałoby się wtedy odtworzyć ani porównać między
-# wersjami potoku.
-#
-# Wartość None przywraca zachowanie losowe - przydatne wyłącznie wtedy, gdy
-# celem jest zmierzenie rozrzutu między przebiegami (patrz
-# porownanie_obuoczne.py, które losowością steruje samodzielnie).
+# I2MC startuje grupowanie 2-means z losowych centroidów (kmeans++), bez ziarna
+# ten sam plik daje przy każdym uruchomieniu inny wynik - obserwowany rozstęp
+# oceny ryzyka sięgał 0,13. None przywraca zachowanie losowe.
 I2MC_RANDOM_SEED = 42
 
 def estimate_sample_rate_ms(time_values, fallback_freq_hz):
-
-    # Automatyczne wyznaczanie okresu próbkowania (ms/próbkę) na podstawie
-    # rzeczywistych znaczników czasu z pliku źródłowego (np. kolumna 'time'
-    # w zbiorze ETDD70 albo 'TIME' w eksporcie z Gazepoint). Częstotliwość
-    # to mediana odstępów między kolejnymi próbkami - odporna na pojedyncze
-    # zdegenerowane wpisy (duplikaty, cofnięcia zegara). Jednostka znaczników
-    # (s / ms / us / ns) jest rozpoznawana automatycznie - patrz niżej.
+    # Okres próbkowania (ms) z rzeczywistych znaczników czasu. Mediana odstępów,
+    # bo jest odporna na duplikaty i cofnięcia zegara.
     #
-    # Wyznaczona wartość jest używana tylko do policzenia jednego skalara
-    # (okres próbkowania); sama kolumna czasu nie jest dalej przenoszona
-    # przez potok analizy - I2MC i tak zakłada równomierne próbkowanie
-    # (interpolacja luk liczona jest w próbkach, a nie w rzeczywistym czasie),
-    # więc do segmentacji nadal służy syntetyczna, równomierna oś czasu
-    # budowana w apply_i2mc_segmentation z indeksu wierszy.
-    #
-    # Gdy znaczniki czasu są nieobecne albo nie da się z nich wyznaczyć
-    # sensownej częstotliwości, używana jest częstotliwość zapasowa.
+    # Sama kolumna czasu nie idzie dalej w potok - I2MC i tak zakłada równomierne
+    # próbkowanie, więc z tego wyliczamy tylko jeden skalar.
     try:
         t = pd.to_numeric(pd.Series(time_values), errors='coerce').to_numpy(dtype=float)
         diffs = np.diff(t)
@@ -68,19 +42,11 @@ def estimate_sample_rate_ms(time_values, fallback_freq_hz):
 
         median_diff = float(np.median(diffs))
 
-        # Autodetekcja jednostki znaczników czasu. Nie da się jej odczytać z
-        # samego pliku, bo źródła zapisują czas w różnych jednostkach: Gazepoint
-        # (kolumna 'TIME') podaje sekundy od startu nagrania, ETDD70 (kolumna
-        # 'time') - mikrosekundy, a eksporty z innych okulografów najczęściej
-        # milisekundy. Jednostkę wybieramy więc po tym, która daje realistyczną
-        # częstotliwość próbkowania.
-        #
-        # Rozstrzygnięcie jest jednoznaczne: dopuszczalny zakres 20-2000 Hz to
-        # okres 0,5-50 ms, czyli rozpiętość 100x, a kolejne jednostki dzieli
-        # 1000x - do zakresu może pasować co najwyżej jedna z nich.
-        #
-        # Nanosekundy uwzględniamy, bo tyle daje kolumna czasu przepuszczona
-        # przez pandas jako datetime64[ns] i skonwertowana na liczby.
+        # Jednostki znaczników nie da się odczytać z pliku: Gazepoint podaje
+        # sekundy, ETDD70 mikrosekundy, inne eksporty zwykle milisekundy.
+        # Wybieramy tę, która daje realistyczną częstotliwość - rozstrzygnięcie
+        # jest jednoznaczne, bo zakres 20-2000 Hz to rozpiętość 100x, a jednostki
+        # dzieli 1000x. 'ns' bierze się z kolumny przepuszczonej przez datetime64.
         candidate_units = (
             ('s', 1000.0),
             ('ms', 1.0),
@@ -117,29 +83,12 @@ def estimate_sample_rate_ms(time_values, fallback_freq_hz):
 
 @contextlib.contextmanager
 def _quiet_empty_slice_warnings():
-
-    # Wycisza dwa ostrzeżenia numpy generowane wewnątrz biblioteki I2MC
-    # (I2MC.get_fix_stats, linia "RMSxy[a] = np.sqrt(np.mean(c))"):
+    # Wycisza dwa RuntimeWarning z I2MC.get_fix_stats: dla fiksacji złożonej
+    # z samych próbek interpolowanych miary precyzji liczone są z pustej tablicy
+    # i wychodzi NaN. Tych kolumn nie używamy w żadnej cesze, a przy analizie
+    # grupowej każdy proces roboczy zasypywałby nimi konsolę.
     #
-    #   RuntimeWarning: Mean of empty slice.
-    #   RuntimeWarning: invalid value encountered in scalar divide
-    #
-    # Oba pochodzą z jednego wywołania np.mean() na pustej tablicy. I2MC liczy
-    # tam miary precyzji fiksacji (RMSxy, BCEA) wyłącznie z próbek realnych, więc
-    # dla fiksacji złożonej w całości z próbek interpolowanych - albo mającej mniej
-    # niż dwie realne próbki - różnice międzypróbkowe są pustym wektorem. Wynikiem
-    # jest RMSxy = NaN, czyli "brak danych o precyzji", i taką samą wartość
-    # biblioteka wpisuje jawnie w sąsiednich gałęziach (BCEA, fixRangeX/Y).
-    #
-    # Dla naszego potoku jest to nieszkodliwe: z tabeli fiksacji korzystamy tylko
-    # z kolumn xpos/ypos/dur/startT/endT (patrz classify_movements), a kolumn
-    # precyzji nie używamy w żadnej cesze diagnostycznej. Ostrzeżenie nie
-    # sygnalizuje więc błędu analizy - zasypuje tylko konsolę analizy grupowej,
-    # gdzie każdy z kilkudziesięciu procesów roboczych wypisuje je niezależnie.
-    #
-    # Filtr jest celowo wąski: wycisza dwa konkretne komunikaty i tylko na czas
-    # wywołania I2MC, więc inne ostrzeżenia (w tym nasze własne) nadal docierają
-    # do użytkownika.
+    # Filtr jest wąski celowo - inne ostrzeżenia nadal docierają do użytkownika.
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', category=RuntimeWarning,
                                 message='Mean of empty slice')
@@ -148,15 +97,9 @@ def _quiet_empty_slice_warnings():
         yield
 
 def run_i2mc(data, opt):
-
-    # Uruchamia I2MC z ustalonym ziarnem generatora losowego (logging=False
-    # wycisza printy biblioteki).
-    #
-    # I2MC losuje centroidy startowe z globalnego generatora numpy, więc ziarno
-    # trzeba ustawić przed wywołaniem. Poprzedni stan generatora jest
-    # odtwarzany po zakończeniu, żeby segmentacja nie zmieniała po cichu
-    # losowości w kodzie wywołującym - istotne przy analizie grupowej, gdzie
-    # jeden proces roboczy przetwarza wielu uczestników po kolei.
+    # I2MC losuje z globalnego generatora numpy, więc ziarno trzeba ustawić przed
+    # wywołaniem, a poprzedni stan odtworzyć - inaczej segmentacja po cichu
+    # zmieniałaby losowość w kodzie wywołującym.
     if I2MC_RANDOM_SEED is None:
         with _quiet_empty_slice_warnings():
             return I2MC.I2MC(data, opt, logging=False)
@@ -170,35 +113,22 @@ def run_i2mc(data, opt):
         np.random.set_state(rng_state)
 
 def apply_i2mc_segmentation(df, sample_rate_ms, screen):
-
-    # Wrapper dla biblioteki I2MC.
-    # Przygotowuje dane, konfiguruje opcje i uruchamia algorytm.
-    # Zwraca DataFrame z wykrytymi fiksacjami.
+    # Wrapper na bibliotekę I2MC: przygotowuje dane, składa opcje, zwraca tabelę
+    # fiksacji (pusty DataFrame przy niepowodzeniu).
     #
-    # Oczekuje DataFrame z kolumnami 'x'/'y' (oko lewe) i opcjonalnie
-    # 'x_prawe'/'y_prawe' (oko prawe). Gdy oba oczy są dostępne, I2MC grupuje
-    # każde z nich niezależnie i uśrednia wagi - stąd bierze się deklarowana
-    # odporność algorytmu na szum. Gdy dostępny jest jeden sygnał (np. już
-    # uśredniony przez okulograf punkt BPOG), algorytm pracuje jednoocznie.
-    #
-    # 'screen' (ScreenGeometry) opisuje ekran, na którym powstało nagranie -
-    # jego rozdzielczość trafia do I2MC jako xres/yres i musi zgadzać się ze
-    # skalą współrzędnych w 'df'.
-
-    # 1. Obliczanie częstotliwości
+    # Oczekuje kolumn 'x'/'y' (oko lewe lub jedyny sygnał) i opcjonalnie
+    # 'x_prawe'/'y_prawe'. Przy dwóch oczach I2MC grupuje każde niezależnie -
+    # stąd bierze się deklarowana odporność algorytmu na szum.
     raw_freq = 1000.0 / sample_rate_ms
-    # I2MC wymaga, aby downsamples były idealnymi dzielnikami częstotliwości.
     freq_nominal = round(raw_freq)
     
-    # 2. Dynamiczne dobieranie downsamples
+    # I2MC wymaga, żeby downsamples były dzielnikami częstotliwości.
     candidate_downsamples = [2, 5, 10]
     valid_downsamples = [d for d in candidate_downsamples if freq_nominal % d == 0]
     
-    # Zabezpieczenie na wypadek nietypowej częstotliwości (np. 60Hz)
     if not valid_downsamples:
-        valid_downsamples = [1]
+        valid_downsamples = [1]  # nietypowa częstotliwość, np. 60 Hz
 
-    # 3. Konfiguracja opcji
     opt = {
         'xres': screen.width_px,
         'yres': screen.height_px,
@@ -206,14 +136,10 @@ def apply_i2mc_segmentation(df, sample_rate_ms, screen):
         'missingx': np.nan,
         'missingy': np.nan,
         'windowtimeInterp': INTERP_MAX_GAP_MS / 1000.0,
-        # Maksymalne przemieszczenie wzroku dopuszczalne w trakcie luki, żeby
-        # I2MC zgodził się ją zinterpolować. Wartość domyślna biblioteki
-        # (xres * 0.2 * sqrt(2), czyli ok. 475 px dla ekranu 1680 px i ok.
-        # 543 px dla 1920 px - skaluje się z rozdzielczością nagrania).
-        # Wcześniejsze 99999 px było większe niż przekątna ekranu, czyli
-        # w praktyce wyłączało ten test: luka pokrywająca się z powrotem do
-        # nowego wiersza była zalepiana gładką krzywą, choć wzrok realnie
-        # przeskoczył ~1400 px.
+        # Maksymalne przemieszczenie wzroku dopuszczalne w interpolowanej luce -
+        # wartość domyślna biblioteki, skalująca się z rozdzielczością. Wcześniejsze
+        # 99999 px wyłączało ten test i luka na powrocie do nowego wiersza była
+        # zalepiana gładką krzywą mimo przeskoku o ~1400 px.
         'maxdisp': screen.width_px * 0.2 * np.sqrt(2),
         'windowtime': WINDOW_SIZE_MS / 1000.0,
         'steptime': 0.02,
@@ -223,14 +149,8 @@ def apply_i2mc_segmentation(df, sample_rate_ms, screen):
         'cutoffstd': 2.0
     }
 
-    # 4. Przygotowanie danych wejściowych
-    #
-    # Kolumny 'x'/'y' to sygnał oka lewego (albo jedyny dostępny sygnał),
-    # 'x_prawe'/'y_prawe' - opcjonalny sygnał oka prawego. Kanał prawego oka
-    # trafia do I2MC tylko wtedy, gdy źródło rzeczywiście zawiera drugi,
-    # niezależny zapis. Wpisanie tego samego sygnału po obu stronach nie dodaje
-    # informacji (I2MC pogrupowałby dwa razy te same dane i uśrednił dwa
-    # identyczne wyniki), a podwaja czas segmentacji.
+    # Oś czasu jest syntetyczna i równomierna - I2MC liczy interpolację luk
+    # w próbkach, nie w czasie rzeczywistym.
     time_data = df.index.values * sample_rate_ms
 
     def to_channel(column_name):
@@ -243,6 +163,8 @@ def apply_i2mc_segmentation(df, sample_rate_ms, screen):
         'L_Y': to_channel('y'),
     }
 
+    # Kanał prawego oka podajemy tylko przy realnie niezależnym zapisie. Ten sam
+    # sygnał po obu stronach nic nie wnosi, a podwaja czas segmentacji.
     binocular = ('x_prawe' in df.columns and 'y_prawe' in df.columns
                  and df['x_prawe'].notna().any())
     if binocular:
@@ -254,31 +176,26 @@ def apply_i2mc_segmentation(df, sample_rate_ms, screen):
           f"{screen.width_px}x{screen.height_px} px, {mode_label})...")
     
     try:
-        # Uruchomienie I2MC
         res = run_i2mc(data, opt)
 
-        # === OBSŁUGA RÓŻNYCH TYPÓW ZWRACANYCH DANYCH ===
-        
-        # Przypadek 1: Tuple (krotka) - [dict, DataFrame, dict]
+        # I2MC zwraca różne struktury zależnie od wersji - szukamy tabeli fiksacji
+        # po charakterystycznych kolumnach zamiast zakładać jeden format.
+
+        # Wariant 1: krotka, gdzieś w niej DataFrame albo słownik z fiksacjami.
         if isinstance(res, tuple):
             found_df = None
             for item in res:
                 if isinstance(item, pd.DataFrame):
-                    # Weryfikacja czy to tabela fiksacji
                     cols = item.columns.tolist()
-                    # Szukamy kluczowych kolumn
                     if any(c in cols for c in ['xpos', 'Xpos', 'mean_x']) and \
                        any(c in cols for c in ['dur', 'duration', 'dur_ms']):
                         found_df = item
                         break
                 elif isinstance(item, dict):
-                    # Podprzypadek A: Słownik zagnieżdżony w kluczu 'final_fixations'
                     if 'final_fixations' in item:
                          found_df = pd.DataFrame(item['final_fixations'])
                          break
                     
-                    # Podprzypadek B: Słownik JEST danymi fiksacji (bez klucza wrappującego)
-                    # Sprawdzamy czy posiada klucze danych
                     keys = item.keys()
                     if any(k in keys for k in ['xpos', 'Xpos', 'mean_x']) and \
                        any(k in keys for k in ['dur', 'duration', 'dur_ms']):
@@ -289,22 +206,21 @@ def apply_i2mc_segmentation(df, sample_rate_ms, screen):
                 return found_df
             else:
                 print("Błąd I2MC: Zwrócono krotkę, ale nie znaleziono w niej tabeli fiksacji.")
-                # Debug: wypisz typy elementów w krotce
+                # Diagnostyka nieznanego formatu.
                 print(f"Zawartość krotki (typy): {[type(x) for x in res]}")
                 if len(res) > 0 and isinstance(res[0], dict):
                      print(f"Klucze pierwszego elementu (jeśli dict): {list(res[0].keys())}")
                 return pd.DataFrame()
 
-        # Przypadek 2: Słownik (bezpośrednio)
+        # Wariant 2: słownik bezpośrednio.
         elif isinstance(res, dict):
             if 'final_fixations' in res:
                 return pd.DataFrame(res['final_fixations'])
-            # Sprawdzenie czy słownik to dane bezpośrednie
             keys = res.keys()
             if any(k in keys for k in ['xpos', 'Xpos', 'mean_x']):
                 return pd.DataFrame(res)
             
-        # Przypadek 3: Błędy lub brak danych
+        # Wariant 3: brak wyniku.
         elif res is False or res is None:
              print("I2MC: Brak fiksacji (zbyt mało danych lub szum).")
              return pd.DataFrame()
@@ -318,21 +234,15 @@ def apply_i2mc_segmentation(df, sample_rate_ms, screen):
         return pd.DataFrame()
 
 def classify_movements(fixations_df, sample_rate_ms):
-
-    # Konwertuje wynik biblioteki I2MC (tabela fiksacji) na listę zdarzeń (FIX/SAC)
-    # kompatybilną z funkcją calculate_features.
-
+    # Tabela fiksacji z I2MC -> lista zdarzeń FIX/SAC dla calculate_features.
     if fixations_df.empty:
         return []
 
     events_output = []
     
-    # === MAPOWANIE NAZW KOLUMN ===
-    # I2MC może zwracać różne nazwy w zależności od wersji.
-    # Mapujemy je na wewnętrzne zmienne.
+    # Mapowanie nazw kolumn - różnią się między wersjami I2MC.
     cols = fixations_df.columns
     
-    # 1. Pozycja X
     if 'xpos' in cols: x_col = 'xpos'
     elif 'Xpos' in cols: x_col = 'Xpos'
     elif 'mean_x' in cols: x_col = 'mean_x'
@@ -340,7 +250,6 @@ def classify_movements(fixations_df, sample_rate_ms):
         print(f"Błąd: Nie znaleziono kolumny pozycji X. Dostępne: {cols}")
         return []
 
-    # 2. Pozycja Y
     if 'ypos' in cols: y_col = 'ypos'
     elif 'Ypos' in cols: y_col = 'Ypos'
     elif 'mean_y' in cols: y_col = 'mean_y'
@@ -348,35 +257,29 @@ def classify_movements(fixations_df, sample_rate_ms):
         print(f"Błąd: Nie znaleziono kolumny pozycji Y. Dostępne: {cols}")
         return []
 
-    # 3. Czas trwania
     if 'dur' in cols: dur_col = 'dur'
     elif 'duration' in cols: dur_col = 'duration'
     else: 
         print(f"Błąd: Nie znaleziono kolumny czasu trwania. Dostępne: {cols}")
         return []
 
-    # 4. Czas startu (opcjonalny do sortowania)
     start_col = 'startT' if 'startT' in cols else ('start_time' if 'start_time' in cols else None)
     end_col = 'endT' if 'endT' in cols else ('end_time' if 'end_time' in cols else None)
 
-   # Sortowanie chronologiczne
     if start_col:
-        fixations_df = fixations_df.sort_values(start_col)
+        fixations_df = fixations_df.sort_values(start_col)  # kolejność chronologiczna
     
     prev_fix = None
     
-    # Zoptymalizowana iteracja za pomocą itertuples
+    # itertuples zamiast iterrows - przy analizie grupowej różnica jest odczuwalna.
     for row in fixations_df.itertuples(index=False):
-        # Pobranie danych za pomocą getattr (szybsze niż iterrows)
         x_val = getattr(row, x_col)
         y_val = getattr(row, y_col)
         dur_val = getattr(row, dur_col)
         
-        # Jeśli brakuje kolumn czasu start/stop, estymuje je na podstawie duracji
         start_val = getattr(row, start_col) if start_col else 0 
         end_val = getattr(row, end_col) if end_col else 0
 
-        # Konwersja czasu trwania (ms) na liczbę próbek
         dur_samples = dur_val / sample_rate_ms if sample_rate_ms > 0 else 0
         
         curr_fix = {
@@ -392,7 +295,8 @@ def classify_movements(fixations_df, sample_rate_ms):
             'end_time': end_val
         }
         
-        # Rekonstrukcja sakady (ruch między fiksacjami)
+        # Sakady nie są mierzone wprost - rekonstruujemy je jako przeskok między
+        # kolejnymi fiksacjami.
         if prev_fix is not None:
             sac_event = {
                 'type': 'SAC',
@@ -400,7 +304,7 @@ def classify_movements(fixations_df, sample_rate_ms):
                 'start_y': prev_fix['end_y'],
                 'end_x': curr_fix['start_x'],
                 'end_y': curr_fix['start_y'],
-                'duration_samples': 0, # Modeluje sakadę jako natychmiastowe przesunięcie
+                'duration_samples': 0,  # sakada jako przesunięcie natychmiastowe
                 'start_time': prev_fix['end_time'],
                 'end_time': curr_fix['start_time']
             }
@@ -412,19 +316,14 @@ def classify_movements(fixations_df, sample_rate_ms):
     return events_output
 
 def calculate_features(events, sample_rate_ms, screen):
-    # Obliczanie cech diagnostycznych na podstawie listy zdarzeń.
-    #
-    # Cechy sakadowe wyrażamy w stopniach kąta widzenia (DVA), żeby były
-    # porównywalne między stanowiskami o różnej geometrii - przeliczenie z
-    # pikseli zależy od ekranu, na którym powstało nagranie, więc geometria
-    # ('screen') jest argumentem, a nie stałą modułu.
+    # Cechy diagnostyczne. Sakadowe wyrażamy w stopniach kąta widzenia, żeby były
+    # porównywalne między stanowiskami - stąd 'screen' w argumentach.
     fixations = [e for e in events if e['type'] == 'FIX']
     saccades = [e for e in events if e['type'] == 'SAC']
     
     if not fixations:
-        # Brak fiksacji oznacza nieudaną segmentację (np. I2MC nie wykrył sygnału),
-        # a nie prawidłowy pomiar zerowy - trzeba to jawnie oznaczyć, żeby
-        # calculate_risk_score nie policzył z tego fałszywie niskiego ryzyka.
+        # Brak fiksacji to nieudana segmentacja, a nie prawidłowy pomiar zerowy.
+        # Bez tej flagi calculate_risk_score policzyłby z zer fałszywie niskie ryzyko.
         zero_features = {k: 0.0 for k in ['fix_prog_duration', 'fix_reg_duration', 'fix_reg_std',
                                  'fix_dur_std', 'sac_prog_pos_x_mean', 'sac_prog_dist_avg',
                                  'sac_prog_range', 'sac_prog_y_stab', 'sac_reg_y_stab']}
@@ -435,18 +334,18 @@ def calculate_features(events, sample_rate_ms, screen):
     reg_fix_durations = []
     all_fix_durations = [f['duration_samples'] * sample_rate_ms for f in fixations]
     
-    # Analiza sekwencji (progresje vs regresje)
+    # Kierunek poprzedzającej sakady dzieli fiksacje na progresywne i regresywne.
     for i in range(1, len(events)):
         curr = events[i]
         prev = events[i-1]
         
         if curr['type'] == 'FIX' and prev['type'] == 'SAC':
-            dx = prev['end_x'] - prev['start_x'] # Kierunek sakady
+            dx = prev['end_x'] - prev['start_x']
             duration = curr['duration_samples'] * sample_rate_ms
             
-            if dx > 0:  # Próg pikselowy dla ruchu w prawo
+            if dx > 0:
                 prog_fix_durations.append(duration)
-            elif dx < 0: # Próg pikselowy dla ruchu w lewo (regresja)
+            elif dx < 0:
                 reg_fix_durations.append(duration)
 
     sac_prog = [s for s in saccades if (s['end_x'] - s['start_x']) > 0]
@@ -482,14 +381,9 @@ def calculate_features(events, sample_rate_ms, screen):
     return features
 
 def calculate_risk_score(features):
-
-    # Algorytm oceny ryzyka dysleksji (Model Logistyczny WRD).
-    # Opiera się na 5 kluczowych parametrach ruchu oczu.
-
-    # Segmentacja I2MC nie wykryła żadnych fiksacji - cechy są sztucznymi zerami,
-    # a nie realnym pomiarem. Liczenie z nich z-score dałoby fałszywie niski wynik
-    # ryzyka (cichy false negative), więc trzeba zwrócić jawny błąd zamiast wyniku.
+    # Model logistyczny WRD na pięciu standaryzowanych cechach.
     if features.get('segmentation_failed', False):
+        # Jawny błąd zamiast wyniku - cichy false negative byłby tu groźniejszy.
         return {
             'total_score': None,
             'raw_z_score': None,
@@ -501,7 +395,6 @@ def calculate_risk_score(features):
 
     config_path = "model_config.json"
     
-    # Próba wczytania dynamicznych wartości STATS i wag z pliku tekstowego
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             model_config = json.load(f)
@@ -509,18 +402,13 @@ def calculate_risk_score(features):
         intercept = model_config["weights"]["intercept"]
         coefs = model_config["weights"]["coefs"]
     else:
-        # Zestaw awaryjny, używany wyłącznie przy braku 'model_config.json'.
-        # To kopia wag i tabeli STATS z aktualnego modelu - retreningu na
-        # zbiorze ETDD70 (70 uczestników, zadanie T4 Meaningful Text)
-        # z etykietami is_dyslexic.
-        # Po każdym uruchomieniu model_trainer.py trzeba je tutaj przepisać:
-        # rozjazd między tym zestawem a plikiem konfiguracyjnym cicho zmienia
-        # wynik modelu, bez żadnego sygnału dla operatora.
+        # Zestaw awaryjny: kopia wag i tabeli STATS z aktualnego modelu (retrening
+        # na ETDD70, zadanie T4). Po każdym model_trainer.py trzeba go tu przepisać -
+        # rozjazd z plikiem konfiguracyjnym po cichu zmienia wynik.
         print("Ostrzeżenie: Brak pliku 'model_config.json'. Używam wartości "
               "domyślnych wbudowanych w analysis_core.")
-        # Statystyki populacyjne do standaryzacji. Czasy fiksacji w
-        # milisekundach, cechy sakadowe w stopniach kąta widzenia (DVA) -
-        # w tych samych jednostkach, w których zwraca je calculate_features.
+        # Czasy fiksacji w ms, cechy sakadowe w DVA - tak jak zwraca je
+        # calculate_features.
         STATS = {
             'fix_reg_duration': {'mean': 373.66681717044077, 'std': 93.2618430533182},
             'fix_prog_duration': {'mean': 461.4615754985895, 'std': 131.93910203846818},
@@ -532,38 +420,32 @@ def calculate_risk_score(features):
         coefs = [2.92828952331705, 1.4848261066881088, -1.4040278264859234,
                  0.19615938101889602, 0.3328652125400432]
 
-    # Pobranie cech z obliczonych danych
     val_x1 = features.get('fix_reg_duration', 0.0)
     val_x2 = features.get('fix_prog_duration', 0.0)
     val_x3 = features.get('fix_reg_std', 0.0)
     val_x4 = features.get('sac_prog_y_stab', 0.0)
     val_x5 = features.get('sac_prog_dist_avg', 0.0)
 
-    # Funkcja pomocnicza do standaryzacji
     def get_z_score(val, name):
         m = STATS[name]['mean']
         s = STATS[name]['std']
         if s == 0: return 0.0
         return (val - m) / s
 
-    # Obliczenie wartości standaryzowanych (x_hat)
     x1_hat = get_z_score(val_x1, 'fix_reg_duration')
     x2_hat = get_z_score(val_x2, 'fix_prog_duration')
     x3_hat = get_z_score(val_x3, 'fix_reg_std')
     x4_hat = get_z_score(val_x4, 'sac_prog_y_stab')
     x5_hat = get_z_score(val_x5, 'sac_prog_dist_avg')
 
-    # Obliczenie Logitu (Z) z wykorzystaniem wczytanych wag z pliku
-    # Wzór: Z = beta_0 + beta_1*x1 + beta_2*x2 + ...
+    # Z = beta_0 + suma(beta_i * x_i), a potem sigmoida -> prawdopodobieństwo.
     logit_Z = intercept + (coefs[0] * x1_hat) + (coefs[1] * x2_hat) + (coefs[2] * x3_hat) + (coefs[3] * x4_hat) + (coefs[4] * x5_hat)
 
-    # Funkcja sigmoidalna: P = 1 / (1 + e^-Z)
     def sigmoid(z):
         return 1.0 / (1.0 + np.exp(-z))
     
     probability = sigmoid(logit_Z)
 
-    # Interpretacja wyniku
     if probability > 0.5:
         risk_group = "Wysokie ryzyko"
     else:

@@ -1,3 +1,6 @@
+# Warstwa okien Tkinter: ekrany prowadzące uczestnika przez eksperyment
+# oraz GUI analizy. Bez logiki badania - same okna i zwracane z nich wartości.
+
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
@@ -5,7 +8,8 @@ from screeninfo import get_monitors, ScreenInfoError
 import experiment_config as cfg
 
 def _get_center_geometry(window_width, window_height, monitor_index=0):
-    # Pozostawione dla pomniejszych okien (np. raportu)
+    # Ciąg "SZERxWYS+X+Y" wyśrodkowany na wskazanym monitorze - dla mniejszych
+    # okien, które nie idą na pełny ekran (np. okno raportu).
     try:
         monitors = get_monitors()
         if not monitors:
@@ -25,65 +29,54 @@ def _get_center_geometry(window_width, window_height, monitor_index=0):
         return f'{window_width}x{window_height}+{center_x}+{center_y}'
 
 def _setup_fullscreen_bg(root, monitor_index=0):
-    # Ustawia okno na pełny ekran, wczytuje i wyświetla zdjęcie jako tło
-    # oraz umieszcza okno na docelowym monitorze.
-    # 1. Podstawowa konfiguracja okna
+    # Pełny ekran na wybranym monitorze plus zdjęcie tła wspólne dla
+    # wszystkich okien eksperymentu.
     root.attributes('-fullscreen', True)
-    root.configure(bg='black') # Tło awaryjne, jeśli zdjęcie się nie załaduje
+    root.configure(bg='black')  # tło awaryjne, gdy zdjęcie się nie wczyta
 
     try:
         monitors = get_monitors()
         if monitors:
             target_monitor = monitors[monitor_index] if monitor_index < len(monitors) else monitors[0]
-            # Ustaw pozycję startową na wybranym monitorze
             root.geometry(f"+{target_monitor.x}+{target_monitor.y}")
-            # Pobierz rozdzielczość monitora
             screen_width = target_monitor.width
             screen_height = target_monitor.height
         else:
             raise ScreenInfoError("Nie znaleziono monitorów.")
     except Exception:
-        # W razie błędu pobierania informacji o monitorach, użyj domyślnych
         screen_width = root.winfo_screenwidth()
         screen_height = root.winfo_screenheight()
 
-    # 2. Wczytanie i obsługa zdjęcia tła
     try:
-        # Ścieżka do zdjęcia tła z konfiguracji
         image_path = cfg.BACKGROUND_IMG
         
-        # Otwórz zdjęcie za pomocą PIL
         pil_image = Image.open(image_path)
         
-        # Przeskaluj zdjęcie do rozdzielczości ekranu
         pil_image = pil_image.resize((screen_width, screen_height), Image.Resampling.LANCZOS)
         
-        # Konwersja na format zrozumiały dla Tkintera
+        # Referencja musi zostać na obiekcie okna - inaczej GC usunie obrazek
+        # i tło zniknie.
         root.background_image = ImageTk.PhotoImage(pil_image)
         
-        # Utwórz Label, który będzie trzymał zdjęcie i wypełni całe okno
         bg_label = tk.Label(root, image=root.background_image)
         bg_label.place(x=0, y=0, relwidth=1, relheight=1)
         
-        # Upewnij się, że etykieta tła jest pod spodem innych elementów
-        bg_label.lower() 
+        bg_label.lower()  # tło pod pozostałymi widżetami
 
+    # Brak tła nie przerywa badania - okno zostaje czarne.
     except FileNotFoundError:
         print(f"Błąd: Nie znaleziono pliku zdjęcia tła pod ścieżką: {image_path}")
-        # Program będzie kontynuował działanie z czarnym tłem awaryjnym
     except Exception as e:
         print(f"Wystąpił nieoczekiwany błąd podczas ładowania tła: {e}")
-        # Program będzie kontynuował działanie z czarnym tłem awaryjnym
 
 def show_message(title, message, button_text, monitor_index=0):
     root = tk.Tk()
     _setup_fullscreen_bg(root, monitor_index)
     
-    # Ramka imitująca "okienko" na środku ekranu
+    # Pełny ekran nie ma paska tytułu, więc tytuł trafia do wnętrza ramki.
     frame = tk.Frame(root, bg='white', highlightbackground='black', highlightthickness=2)
     frame.place(relx=0.5, rely=0.5, anchor='center', width=600, height=350)
     
-    # Ponieważ okno nie ma paska tytułowego w fullscreenie, dodaję tytuł wewnątrz
     title_label = tk.Label(frame, text=title, font=("Arial", 18, "bold"), bg='white', fg='black')
     title_label.pack(pady=(20, 10))
 
@@ -129,6 +122,7 @@ def get_participant_id(prompt, monitor_index=0):
     return participant_id
 
 def select_monitor(default_index=0):
+    # Pyta o monitor tylko wtedy, gdy jest z czego wybierać.
     try:
         num_displays = len(get_monitors())
     except ScreenInfoError:
@@ -186,6 +180,8 @@ def wait_for_calibration_confirmation():
     button = tk.Button(frame, text="Kalibracja Zakończona, Kontynuuj", font=("Arial", 12), command=root.destroy, bg='#EAEAEA', fg='black', relief=tk.FLAT, padx=20, pady=10)
     button.pack(pady=15)
     
+    # Okno musi zejść pod spód, żeby nie zasłaniać punktów kalibracyjnych
+    # rysowanych przez Gazepoint Control.
     root.attributes('-topmost', True)
     root.after(50, root.lower)
     root.mainloop()
@@ -201,11 +197,12 @@ def show_info(title, message):
     messagebox.showinfo(title, message)
 
 class AnalysisGUI:
+    # Okno startowe analizy - wybór trybu, pasek statusu i okno raportu.
     def __init__(self, run_individual_callback, run_group_callback):
         self.root = tk.Tk()
         _setup_fullscreen_bg(self.root, 0)
         
-        # Callbacki do logiki biznesowej
+        # Logika analizy wstrzykiwana z analysis_main.
         self.run_individual_callback = run_individual_callback
         self.run_group_callback = run_group_callback
         
@@ -229,6 +226,7 @@ class AnalysisGUI:
         self.status_label = tk.Label(self.frame, text="Gotowy", fg="gray", bg='white', font=("Arial", 10))
         self.status_label.pack(side="bottom", pady=15)
 
+        # Zamknięcie aplikacji - w pełnym ekranie nie ma systemowego "X".
         self.exit_button = tk.Button(
             self.root, 
             text="✕", 
@@ -259,7 +257,7 @@ class AnalysisGUI:
         text_area = tk.Text(win, wrap="word", padx=15, pady=15, font=("Arial", 11))
         text_area.pack(expand=True, fill="both")
         text_area.insert("1.0", text_content)
-        text_area.config(state="disabled")
+        text_area.config(state="disabled")  # raport tylko do odczytu
 
     def run(self):
         self.root.mainloop()

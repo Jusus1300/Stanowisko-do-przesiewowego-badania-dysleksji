@@ -1,3 +1,6 @@
+# Analiza pojedynczego nagrania z własnego stanowiska: sygnał z GP3 -> fiksacje
+# -> cechy -> ocena ryzyka, plus wykres ścieżki wzroku i raport tekstowy.
+
 import pandas as pd
 import numpy as np
 import analysis_core as core
@@ -10,31 +13,17 @@ def run_analysis(file_path):
     print(f"Rozpoczynanie analizy indywidualnej (Algorytm I2MC) dla: {file_path}")
     
     try:
-        # Wczytanie danych
         df = pd.read_csv(file_path)
         input_dir = os.path.dirname(file_path)
 
-        # 0. Geometria stanowiska, na którym powstało nagranie.
-        #
-        # GP3 podaje współrzędne znormalizowane do rozmiaru ekranu (0-1), więc
-        # to geometria decyduje, na jaką liczbę pikseli, a dalej na ile stopni
-        # kąta widzenia, przelicza się każdy ruch oka. Wcześniej potok mnożył
-        # je przez stałe ekranu zbioru ETDD70 (1680x1050, 47,4 cm), czyli
-        # przez parametry zupełnie innego stanowiska - wynik był systematycznie
-        # przeskalowany, a I2MC dostawał xres/yres niezgodne z danymi.
-        # Parametry bierzemy więc z pliku zapisanego przy nagraniu, a gdy go
-        # brak - z experiment_config.py (patrz cfg.screen_for_recording).
+        # 0. Geometria nagrania. GP3 podaje współrzędne znormalizowane (0-1), więc
+        #    to ona decyduje o skali pikselowej, a dalej o cechach w DVA.
         screen = cfg.screen_for_recording(input_dir)
         print(f"Geometria ekranu nagrania: {screen.describe()}")
 
-        # 1. Przygotowanie sygnału
-        #
-        # Nagrania z GP3 zawierają punkt spojrzenia osobno dla każdego oka
-        # (LPOG*/RPOG*) oraz uśredniony przez okulograf punkt BPOG. Do
-        # segmentacji podajemy oba oczy, żeby I2MC mógł grupować je
-        # niezależnie. Starsze nagrania, sprzed włączenia ENABLE_SEND_POG_LEFT
-        # i ENABLE_SEND_POG_RIGHT w gazepoint.py, mają tylko BPOG - wtedy
-        # potok schodzi do trybu jednoocznego na tym uśrednionym punkcie.
+        # 1. Przygotowanie sygnału. Do segmentacji podajemy oba oczy; nagrania
+        #    sprzed włączenia ENABLE_SEND_POG_LEFT/RIGHT mają tylko uśredniony
+        #    przez okulograf punkt BPOG i lecą jednoocznie.
         has_both_eyes = {'LPOGX', 'LPOGY', 'RPOGX', 'RPOGY'} <= set(df.columns)
 
         clean_df = pd.DataFrame()
@@ -56,16 +45,11 @@ def run_analysis(file_path):
                   f"{cfg.EYETRACKER_FREQ} Hz.")
             sample_rate_ms = 1000.0 / cfg.EYETRACKER_FREQ
 
-        # Brakujące/nieprawidłowe próbki (poza zakresem ekranu) oznaczamy jako NaN
-        # zamiast usuwać wiersze: usunięcie wiersza przesuwa oś czasu, więc I2MC
-        # nigdy nie zobaczyłby luki do interpolacji (patrz core.INTERP_MAX_GAP_MS).
+        # Złe próbki oznaczamy jako NaN zamiast usuwać wiersze - usunięcie wiersza
+        # przesuwa oś czasu i I2MC nie zobaczyłby luki do interpolacji.
         #
-        # Filtr działa osobno na każdym oku - próbka odrzucona na jednym oku nie
-        # unieważnia drugiego, bo I2MC potrafi skorzystać z oka pozostałego
-        # (I2MC.average_eyes). Poza zakresem ekranu sprawdzana jest też flaga
-        # poprawności z okulografu (POGV): GP3 przy zgubionym oku podaje ostatnią
-        # znaną pozycję z POGV=0, a taka próbka mieści się w zakresie 0-1
-        # i przeszłaby przez sam test zakresu.
+        # Poza zakresem ekranu sprawdzamy flagę POGV: przy zgubionym oku GP3 podaje
+        # ostatnią znaną pozycję, która sam test zakresu by przeszła.
         def valid_mask(x_col, y_col, v_col):
             mask = (
                 (df[x_col] >= 0) & (df[x_col] <= 1) &
@@ -82,9 +66,8 @@ def run_analysis(file_path):
         else:
             clean_df.loc[~valid_mask('BPOGX', 'BPOGY', 'BPOGV'), ['x', 'y']] = np.nan
 
-        # Oko bez ani jednej poprawnej próbki wypada z analizy zamiast trafiać
-        # do I2MC jako kolumna samych NaN - grupowanie takiego kanału kończy się
-        # błędem i przewraca segmentację także dla oka sprawnego.
+        # Oko bez ani jednej poprawnej próbki wypada z analizy - kolumna samych NaN
+        # wywraca grupowanie I2MC także dla oka sprawnego.
         left_ok = clean_df['x'].notna().any()
         right_ok = has_both_eyes and clean_df['x_prawe'].notna().any()
 
@@ -106,13 +89,13 @@ def run_analysis(file_path):
             print("Lewe oko bez poprawnych próbek - analiza jednooczna (prawe).")
             tryb_segmentacji = "jednooczny - prawe oko (lewe bez poprawnych próbek)"
 
-        # 2. Segmentacja - Wywołanie I2MC
+        # 2. Segmentacja i zdarzenia
         df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms, screen)
         
-        # 3. Klasyfikacja ruchów i scalanie
         events = core.classify_movements(df_segmented, sample_rate_ms)
         
-        # Generowanie wizualizacji
+        # 3. Wykres ścieżki wzroku na tle bodźca - błąd rysowania nie może przerwać
+        #    samej analizy, więc łapiemy go osobno.
         viz_status = "Nie wygenerowano wykresu."
         try:
             img_filename = cfg.STIMULUS_SCREENSHOT
@@ -123,7 +106,6 @@ def run_analysis(file_path):
 
             plt.figure(figsize=(16, 9))
             
-            # Wczytanie tła
             if os.path.exists(img_path):
                 img = mpimg.imread(img_path)
                 plt.imshow(img, extent=[0, screen.width_px, screen.height_px, 0])
@@ -133,16 +115,14 @@ def run_analysis(file_path):
                 plt.text(screen.width_px/2, screen.height_px/2, 
                          "Brak pliku tła", ha='center', va='center')
 
-            # Rysowanie fiksacji i ścieżki
             fixations = [e for e in events if e['type'] == 'FIX']
             
-            # 1. Rysowanie linii łączących (ścieżka wzroku)
             if len(fixations) > 1:
                 x_coords = [f['mean_x'] for f in fixations]
                 y_coords = [f['mean_y'] for f in fixations]
                 plt.plot(x_coords, y_coords, c='blue', alpha=0.4, linewidth=1, zorder=1)
 
-            # 2. Rysowanie fiksacji (kółka)
+            # Wielkość kółka = czas fiksacji; pierwsza żółta, ostatnia czerwona.
             for f in fixations:
                 size = max(20, f['duration_samples'] * 2)
                 color = 'lime'
@@ -162,13 +142,13 @@ def run_analysis(file_path):
         except Exception as viz_e:
             viz_status = f"Błąd wizualizacji: {str(viz_e)}"
 
-        # 4. Cechy
+        # 4. Cechy i model
         features = core.calculate_features(events, sample_rate_ms, screen)
         
-        # 5. Model
         diagnosis = core.calculate_risk_score(features)
 
-        # 6. Raport
+        # 5. Raport. Wyniki behawioralne (odpowiedź na pytanie do tekstu) są
+        #    opcjonalne - dokładamy je, jeśli plik istnieje.
         behav_path = os.path.join(input_dir, "wyniki_behawioralne.csv")
         behav_info = "\n------------------------------------\nWYNIKI BEHAWIORALNE:\n"
         if os.path.exists(behav_path):
@@ -219,7 +199,7 @@ def run_analysis(file_path):
                 f"KLASYFIKACJA: {diagnosis['risk_group']}\n"
             )
 
-        # Zapis raportu do pliku tekstowego obok wykresu
+        # Raport ląduje obok wykresu, w folderze nagrania.
         with open(report_path, "w", encoding="utf-8") as file:
             file.write(report)
 
