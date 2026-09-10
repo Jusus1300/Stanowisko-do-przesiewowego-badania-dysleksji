@@ -3,13 +3,14 @@ import numpy as np
 import os
 import glob
 import analysis_core as core
+import screen_geometry
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import concurrent.futures
 
-def process_single_subject(filepath, folder_path, generate_plots):
+def process_single_subject(filepath, folder_path, generate_plots, screen):
     """Funkcja pomocnicza przetwarzająca pojedynczego uczestnika (dla multiprocessing)"""
     filename = os.path.basename(filepath)
     print(f"Przetwarzanie: {filename}...")
@@ -76,10 +77,10 @@ def process_single_subject(filepath, folder_path, generate_plots):
                   f"analiza jednooczna (prawe).")
 
         # --- POTOK ANALIZY I2MC ---
-        df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms)
+        df_segmented = core.apply_i2mc_segmentation(clean_df, sample_rate_ms, screen)
         
         events = core.classify_movements(df_segmented, sample_rate_ms)
-        features = core.calculate_features(events, sample_rate_ms)
+        features = core.calculate_features(events, sample_rate_ms, screen)
         diagnosis = core.calculate_risk_score(features)
 
         if diagnosis['total_score'] is None:
@@ -97,11 +98,11 @@ def process_single_subject(filepath, folder_path, generate_plots):
                 
                 if os.path.exists(bg_path):
                     img = mpimg.imread(bg_path)
-                    plt.imshow(img, extent=[0, core.SCREEN_WIDTH, core.SCREEN_HEIGHT, 0])
+                    plt.imshow(img, extent=[0, screen.width_px, screen.height_px, 0])
                 else:
-                    plt.xlim(0, core.SCREEN_WIDTH)
-                    plt.ylim(core.SCREEN_HEIGHT, 0)
-                    plt.text(core.SCREEN_WIDTH/2, core.SCREEN_HEIGHT/2, 
+                    plt.xlim(0, screen.width_px)
+                    plt.ylim(screen.height_px, 0)
+                    plt.text(screen.width_px/2, screen.height_px/2, 
                              f"Brak pliku tła: {bg_filename}", ha='center', va='center')
                 
                 fixations = [e for e in events if e['type'] == 'FIX']
@@ -142,8 +143,16 @@ def process_single_subject(filepath, folder_path, generate_plots):
         print(f"  -> Błąd pliku {filename}: {e}")
         return None
 
-def run_analysis(folder_path, generate_plots=True):
+def run_analysis(folder_path, generate_plots=True, screen=screen_geometry.ETDD70_SCREEN):
+
+    # Analiza grupowa pracuje na plikach 'Subject_*_raw.csv' ze zbioru ETDD70,
+    # których współrzędne są zapisane w pikselach ekranu użytego przy jego
+    # nagrywaniu - stąd domyślna geometria ETDD70_SCREEN. Dane z innego
+    # stanowiska wymagają podania własnej geometrii, bo od niej zależy zarówno
+    # przeliczenie cech na stopnie kąta widzenia, jak i xres/yres dla I2MC.
+
     print(f"Rozpoczynanie analizy grupowej (I2MC) w folderze: {folder_path}")
+    print(f"Geometria ekranu: {screen.describe()}")
     
     files = glob.glob(os.path.join(folder_path, "Subject_*_raw.csv"))
     
@@ -156,7 +165,7 @@ def run_analysis(folder_path, generate_plots=True):
     print(f"Uruchamianie przetwarzania wielowątkowego dla {len(files)} plików...")
     with concurrent.futures.ProcessPoolExecutor() as executor:
         # Przekazywanie argumentów do funkcji process_single_subject
-        futures = {executor.submit(process_single_subject, fp, folder_path, generate_plots): fp for fp in files}
+        futures = {executor.submit(process_single_subject, fp, folder_path, generate_plots, screen): fp for fp in files}
         
         for future in concurrent.futures.as_completed(futures):
             res = future.result()

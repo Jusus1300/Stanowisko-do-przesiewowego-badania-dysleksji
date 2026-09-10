@@ -8,6 +8,23 @@ TARGET_IMG = "dane_do_eksperymentu/grafiki/bot.png"
 # Ustawienia Ekranu i Grafiki
 SCREEN_WIDTH, SCREEN_HEIGHT = 1920, 1080
 DEFAULT_MONITOR_INDEX = 0 
+
+# Fizyczne parametry stanowiska. Razem z rozdzielczością powyżej opisują
+# geometrię, w której powstaje nagranie, i są używane przez analizę do
+# przeliczenia pikseli na stopnie kąta widzenia (patrz screen_geometry.py).
+# Obie wartości trzeba ZMIERZYĆ dla konkretnego stanowiska - są to jedyne
+# parametry potoku, których nie da się odczytać z danych ani z systemu, a
+# błąd w nich przesuwa wszystkie cechy sakadowe względem tablicy STATS modelu
+# (np. 10% za mała szerokość ekranu zaniża sac_prog_dist_avg o ~10%).
+#
+# SCREEN_WIDTH_CM: szerokość aktywnej powierzchni matrycy (nie przekątna
+#   i nie szerokość obudowy). Wartość domyślna odpowiada typowemu monitorowi
+#   23,8" w formacie 16:9.
+# VIEWING_DISTANCE_CM: odległość oczu badanego od ekranu; dla Gazepoint GP3
+#   zalecany zakres to 60-70 cm.
+SCREEN_WIDTH_CM = 52.7
+VIEWING_DISTANCE_CM = 65.0
+
 BACKGROUND_COLOR = (40, 40, 40)
 TEXT_COLOR = (255, 255, 255)
 FONT_SIZE_PYGAME = 48

@@ -7,11 +7,11 @@ import warnings
 import json
 import os
 
-# Stałe ekranu
-SCREEN_WIDTH = 1680
-SCREEN_HEIGHT = 1050
-SCREEN_WIDTH_CM = 47.4  # Parametry fizyczne ekranu (estymowane)   
-VIEWING_DISTANCE_CM = 60.0
+# Uwaga: ten moduł nie definiuje żadnej domyślnej geometrii ekranu. Parametry
+# ekranu (obiekt screen_geometry.ScreenGeometry) opisują konkretne nagranie
+# i są przekazywane w argumencie - wcześniejsze stałe modułu opisywały ekran
+# zbioru ETDD70 i po cichu obowiązywały także dla nagrań z własnego
+# stanowiska o innej rozdzielczości i innych wymiarach fizycznych.
 
 # Domyślna (zapasowa) częstotliwość próbkowania eyetrackera w eksperymencie
 # grupowym. Używana wyłącznie jako fallback, gdy w pliku źródłowym brak
@@ -39,12 +39,6 @@ WINDOW_SIZE_MS = 200
 # celem jest zmierzenie rozrzutu między przebiegami (patrz
 # porownanie_obuoczne.py, które losowością steruje samodzielnie).
 I2MC_RANDOM_SEED = 42
-
-def px_to_dva(px_distance):
-    # Konwertuje dystans w pikselach na stopnie kąta widzenia (DVA).
-    cm_per_px = SCREEN_WIDTH_CM / SCREEN_WIDTH
-    dist_cm = px_distance * cm_per_px
-    return 2 * np.degrees(np.arctan(dist_cm / (2 * VIEWING_DISTANCE_CM)))
 
 def estimate_sample_rate_ms(time_values, fallback_freq_hz):
 
@@ -175,7 +169,7 @@ def run_i2mc(data, opt):
     finally:
         np.random.set_state(rng_state)
 
-def apply_i2mc_segmentation(df, sample_rate_ms):
+def apply_i2mc_segmentation(df, sample_rate_ms, screen):
 
     # Wrapper dla biblioteki I2MC.
     # Przygotowuje dane, konfiguruje opcje i uruchamia algorytm.
@@ -186,6 +180,10 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
     # każde z nich niezależnie i uśrednia wagi - stąd bierze się deklarowana
     # odporność algorytmu na szum. Gdy dostępny jest jeden sygnał (np. już
     # uśredniony przez okulograf punkt BPOG), algorytm pracuje jednoocznie.
+    #
+    # 'screen' (ScreenGeometry) opisuje ekran, na którym powstało nagranie -
+    # jego rozdzielczość trafia do I2MC jako xres/yres i musi zgadzać się ze
+    # skalą współrzędnych w 'df'.
 
     # 1. Obliczanie częstotliwości
     raw_freq = 1000.0 / sample_rate_ms
@@ -202,19 +200,21 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
 
     # 3. Konfiguracja opcji
     opt = {
-        'xres': SCREEN_WIDTH,
-        'yres': SCREEN_HEIGHT,
+        'xres': screen.width_px,
+        'yres': screen.height_px,
         'freq': freq_nominal,
         'missingx': np.nan,
         'missingy': np.nan,
         'windowtimeInterp': INTERP_MAX_GAP_MS / 1000.0,
         # Maksymalne przemieszczenie wzroku dopuszczalne w trakcie luki, żeby
         # I2MC zgodził się ją zinterpolować. Wartość domyślna biblioteki
-        # (xres * 0.2 * sqrt(2) = ok. 475 px). Wcześniejsze 99999 px było
-        # większe niż przekątna ekranu, czyli w praktyce wyłączało ten test:
-        # luka pokrywająca się z powrotem do nowego wiersza była zalepiana
-        # gładką krzywą, choć wzrok realnie przeskoczył ~1400 px.
-        'maxdisp': SCREEN_WIDTH * 0.2 * np.sqrt(2),
+        # (xres * 0.2 * sqrt(2), czyli ok. 475 px dla ekranu 1680 px i ok.
+        # 543 px dla 1920 px - skaluje się z rozdzielczością nagrania).
+        # Wcześniejsze 99999 px było większe niż przekątna ekranu, czyli
+        # w praktyce wyłączało ten test: luka pokrywająca się z powrotem do
+        # nowego wiersza była zalepiana gładką krzywą, choć wzrok realnie
+        # przeskoczył ~1400 px.
+        'maxdisp': screen.width_px * 0.2 * np.sqrt(2),
         'windowtime': WINDOW_SIZE_MS / 1000.0,
         'steptime': 0.02,
         'downsamples': valid_downsamples,
@@ -250,7 +250,8 @@ def apply_i2mc_segmentation(df, sample_rate_ms):
         data['R_Y'] = to_channel('y_prawe')
 
     mode_label = "obuocznie" if binocular else "jednoocznie"
-    print(f"Uruchamianie biblioteki I2MC (freq={freq_nominal}Hz, {mode_label})...")
+    print(f"Uruchamianie biblioteki I2MC (freq={freq_nominal}Hz, "
+          f"{screen.width_px}x{screen.height_px} px, {mode_label})...")
     
     try:
         # Uruchomienie I2MC
@@ -410,8 +411,13 @@ def classify_movements(fixations_df, sample_rate_ms):
         
     return events_output
 
-def calculate_features(events, sample_rate_ms):
+def calculate_features(events, sample_rate_ms, screen):
     # Obliczanie cech diagnostycznych na podstawie listy zdarzeń.
+    #
+    # Cechy sakadowe wyrażamy w stopniach kąta widzenia (DVA), żeby były
+    # porównywalne między stanowiskami o różnej geometrii - przeliczenie z
+    # pikseli zależy od ekranu, na którym powstało nagranie, więc geometria
+    # ('screen') jest argumentem, a nie stałą modułu.
     fixations = [e for e in events if e['type'] == 'FIX']
     saccades = [e for e in events if e['type'] == 'SAC']
     
@@ -448,7 +454,7 @@ def calculate_features(events, sample_rate_ms):
 
     def get_avg_dist(event_list):
         if not event_list: return 0.0
-        dists = [px_to_dva(abs(e['end_x'] - e['start_x'])) for e in event_list]
+        dists = [screen.px_to_dva(abs(e['end_x'] - e['start_x'])) for e in event_list]
         return np.mean(dists)
 
     def get_avg_pos_x(event_list):
@@ -458,7 +464,7 @@ def calculate_features(events, sample_rate_ms):
 
     def get_y_stability(event_list):
         if not event_list: return 0.0
-        y_diffs = [px_to_dva(abs(e['end_y'] - e['start_y'])) for e in event_list]
+        y_diffs = [screen.px_to_dva(abs(e['end_y'] - e['start_y'])) for e in event_list]
         return np.mean(y_diffs)
         
     features = {
@@ -468,7 +474,7 @@ def calculate_features(events, sample_rate_ms):
         'fix_dur_std': np.std(all_fix_durations) if all_fix_durations else 0.0,
         'sac_prog_pos_x_mean': get_avg_pos_x(sac_prog),
         'sac_prog_dist_avg': get_avg_dist(sac_prog),
-        'sac_prog_range': px_to_dva(np.max([abs(s['end_x'] - s['start_x']) for s in sac_prog])) if sac_prog else 0.0,
+        'sac_prog_range': screen.px_to_dva(np.max([abs(s['end_x'] - s['start_x']) for s in sac_prog])) if sac_prog else 0.0,
         'sac_prog_y_stab': get_y_stability(sac_prog),
         'sac_reg_y_stab': get_y_stability(sac_reg),
         'segmentation_failed': False

@@ -46,6 +46,27 @@ pip install -r requirements.txt
 
 Wszystkie skrypty uruchamiaj z katalogu głównego repozytorium.
 
+## Konfiguracja stanowiska
+
+Przed pierwszym badaniem ustaw w `experiment_config.py` parametry ekranu, na którym
+prezentowany jest bodziec:
+
+| Parametr | Znaczenie |
+| --- | --- |
+| `SCREEN_WIDTH`, `SCREEN_HEIGHT` | rozdzielczość ekranu w pikselach |
+| `SCREEN_WIDTH_CM` | zmierzona szerokość aktywnej powierzchni matrycy (nie przekątna) |
+| `VIEWING_DISTANCE_CM` | odległość oczu badanego od ekranu (dla GP3 zwykle 60-70 cm) |
+
+Te cztery liczby opisują geometrię nagrania i decydują o przeliczeniu współrzędnych
+wzroku na stopnie kąta widzenia (DVA), w których wyrażone są cechy sakadowe modelu.
+Błąd w nich przesuwa wynik systematycznie dla wszystkich badanych, dlatego szerokość
+ekranu i odległość trzeba zmierzyć, a nie oszacować.
+
+`experiment_main.py` zapisuje użytą geometrię w folderze uczestnika jako
+`parametry_ekranu.json` (rozdzielczość odczytana z systemu, parametry fizyczne
+z konfiguracji), więc nagranie opisuje samo siebie i późniejsza zmiana konfiguracji
+nie zmienia interpretacji wcześniejszych danych.
+
 ## Uruchomienie eksperymentu
 
 ```bash
@@ -63,6 +84,18 @@ python analysis_main.py
 
 Otwiera GUI z wyborem analizy indywidualnej (pojedynczy plik CSV z nagrania) lub
 grupowej (katalog z plikami `Subject_*_raw.csv`).
+
+Geometrię ekranu każda z analiz bierze z odpowiedniego źródła (patrz
+`screen_geometry.py`):
+
+* analiza indywidualna - z pliku `parametry_ekranu.json` w folderze nagrania,
+  a gdy go brak (nagrania sprzed wprowadzenia tego pliku) - z `experiment_config.py`,
+  z ostrzeżeniem, jeśli zrzut ekranu bodźca ma inną rozdzielczość niż konfiguracja;
+* analiza grupowa - z parametrów zbioru ETDD70 (1680x1050), bo pliki
+  `Subject_*_raw.csv` zawierają współrzędne w pikselach tamtego ekranu.
+
+Użyta geometria trafia do nagłówka raportu indywidualnego, więc widać w nim, na
+jakich parametrach policzono wynik.
 
 ## Etykietowanie wyników
 
