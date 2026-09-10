@@ -8,7 +8,7 @@ import json
 import os
 
 # Uwaga: ten moduł nie definiuje żadnej domyślnej geometrii ekranu. Parametry
-# ekranu (obiekt screen_geometry.ScreenGeometry) opisują konkretne nagranie
+# ekranu (obiekt experiment_config.ScreenGeometry) opisują konkretne nagranie
 # i są przekazywane w argumencie - wcześniejsze stałe modułu opisywały ekran
 # zbioru ETDD70 i po cichu obowiązywały także dla nagrań z własnego
 # stanowiska o innej rozdzielczości i innych wymiarach fizycznych.

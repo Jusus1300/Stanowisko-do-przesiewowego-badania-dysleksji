@@ -6,7 +6,6 @@ from gazepoint import GazeTracker
 import tkinter_module as ui
 import experiment_module as exp
 import experiment_config as cfg
-import screen_geometry
 
 def save_behavioral_result(filepath, trial_num, result):
     file_exists = os.path.exists(filepath)
@@ -41,8 +40,8 @@ def main():
         # współrzędne GP3 (znormalizowane do rozmiaru ekranu) na piksele i dalej
         # na stopnie kąta widzenia, więc bez tych parametrów musiałaby zakładać,
         # że konfiguracja stanowiska nie zmieniła się od czasu nagrania.
-        station_screen, edid_width_cm = screen_geometry.detect_station_screen(selected_monitor)
-        screen_geometry.save(station_screen, participant_folder, edid_width_cm)
+        station_screen, edid_width_cm = cfg.detect_station_screen(selected_monitor)
+        cfg.save_screen_geometry(station_screen, participant_folder, edid_width_cm)
         print(f"[INFO] Parametry ekranu nagrania: {station_screen.describe()}")
 
         tracker = GazeTracker(host=cfg.GAZEPOINT_HOST, port=cfg.GAZEPOINT_PORT)
