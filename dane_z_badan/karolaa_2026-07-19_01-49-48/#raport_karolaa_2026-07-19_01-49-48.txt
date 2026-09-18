@@ -1,0 +1,22 @@
+
+=== WYNIKI ANALIZY INDYWIDUALNEJ===
+Plik: C:/Users/jusus/Desktop/Inzynierka/INŻYNIERKA_V0.1/Stanowisko do przesiewowego badania dysleksji/dane_z_badan/karolaa_2026-07-19_01-49-48/czytanie_tekstu_dane_surowe.csv
+Wykrytych fiksacji: 36
+Częstotliwość próbkowania: 6.67 ms
+Status wizualizacji: Wygenerowano wykres: #scanpath_karolaa_2026-07-19_01-49-48.png
+------------------------------------
+CECHY DIAGNOSTYCZNE:
+1. Śr. czas fiksacji PROG: 240.00 ms
+2. Śr. czas fiksacji REGR: 288.00 ms
+3. Odchylenie std REGR:    185.35 ms
+4. Śr. dystans sakad PROG: 3.78 px
+5. Max zakres sakad PROG:  7.40 px
+6. Stab. Y (Sakady PROG):  0.74 px
+7. Stab. Y (Sakady REGR):  4.16 px
+
+------------------------------------
+WYNIKI BEHAWIORALNE:
+Czy odpowiedź jest poprawna?: TAK, Czas reakcji: 2.128 s
+------------------------------------
+WYNIK MODELU: 0.290 (Próg: 0.5)
+KLASYFIKACJA: Niskie ryzyko

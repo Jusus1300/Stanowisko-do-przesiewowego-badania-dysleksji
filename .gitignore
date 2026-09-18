@@ -1,0 +1,6 @@
+# Cache bajtkodu Pythona
+__pycache__/
+*.py[cod]
+
+# Wykresy ścieżki wzroku z analizy grupowej
+*_scanpath.png
